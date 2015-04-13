@@ -51,7 +51,6 @@
 
 /* Number of external interrupt lines to configure the GIC with */
 #define NUM_IRQS 256
-
 #define PLATFORM_BUS_NUM_IRQS 64
 
 static ARMPlatformBusSystemParams platform_bus_params;
@@ -110,8 +109,9 @@ static const MemMapEntry a15memmap[] = {
     [VIRT_UART] =               { 0x09000000, 0x00001000 },
     [VIRT_RTC] =                { 0x09010000, 0x00001000 },
     [VIRT_FW_CFG] =             { 0x09020000, 0x0000000a },
+    [VIRT_SMMU] =		{ 0x09030000, 0x00001000 },
     [VIRT_MMIO] =               { 0x0a000000, 0x00000200 },
-    /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
+   /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
     [VIRT_PLATFORM_BUS] =       { 0x0c000000, 0x02000000 },
     [VIRT_PCIE_MMIO] =          { 0x10000000, 0x2eff0000 },
     [VIRT_PCIE_PIO] =           { 0x3eff0000, 0x00010000 },
@@ -441,6 +441,28 @@ static void create_uart(const VirtBoardInfo *vbi, qemu_irq *pic)
                          clocknames, sizeof(clocknames));
 
     qemu_fdt_setprop_string(vbi->fdt, "/chosen", "stdout-path", nodename);
+    g_free(nodename);
+}
+
+static void create_smmu(const VirtBoardInfo *vbi, qemu_irq *pic)
+{
+    char *nodename;
+    hwaddr base = vbi->memmap[VIRT_SMMU].base;
+    hwaddr size = vbi->memmap[VIRT_SMMU].size;
+    int irq = vbi->irqmap[VIRT_RTC];
+    const char compat[] = "brcm,smmu\0brcm,smmuv3\0arm,primecell";
+
+    sysbus_create_simple("smmu", base, pic[irq]);
+
+    nodename = g_strdup_printf("/smmu@%" PRIx64, base);
+    qemu_fdt_setprop(vbi->fdt, nodename, "compatible", compat, sizeof(compat));
+    qemu_fdt_setprop_sized_cells(vbi->fdt, nodename, "reg",
+                                 2, base, 2, size);
+    qemu_fdt_setprop_cells(vbi->fdt, nodename, "interrupts",
+                           GIC_FDT_IRQ_TYPE_SPI, irq,
+                           GIC_FDT_IRQ_FLAGS_LEVEL_HI);
+    qemu_fdt_setprop_cell(vbi->fdt, nodename, "clocks", vbi->clock_phandle);
+    qemu_fdt_setprop_string(vbi->fdt, nodename, "clock-names", "apb_pclk");
     g_free(nodename);
 }
 
@@ -881,6 +903,7 @@ static void machvirt_init(MachineState *machine)
 
     create_rtc(vbi, pic);
 
+    create_smmu(vbi, pic);
     create_pcie(vbi, pic);
 
     /* Create mmio transports, so the user can create virtio backends
