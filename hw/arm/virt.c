@@ -450,11 +450,12 @@ static void create_smmu(const VirtBoardInfo *vbi, qemu_irq *pic)
     hwaddr base = vbi->memmap[VIRT_SMMU].base;
     hwaddr size = vbi->memmap[VIRT_SMMU].size;
     int irq = vbi->irqmap[VIRT_RTC];
-    const char compat[] = "brcm,smmu\0brcm,smmuv3\0arm,primecell";
+    const char compat[] = "brcm,smmuv3\0arm,primecell";
 
-    sysbus_create_simple("smmu", base, pic[irq]);
+    sysbus_create_simple("smmuv3", base, pic[irq]);
 
-    nodename = g_strdup_printf("/smmu@%" PRIx64, base);
+    nodename = g_strdup_printf("/smmuv3@%" PRIx64, base);
+    qemu_fdt_add_subnode(vbi->fdt, nodename);
     qemu_fdt_setprop(vbi->fdt, nodename, "compatible", compat, sizeof(compat));
     qemu_fdt_setprop_sized_cells(vbi->fdt, nodename, "reg",
                                  2, base, 2, size);
