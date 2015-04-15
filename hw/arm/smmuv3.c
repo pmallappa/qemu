@@ -62,7 +62,8 @@ static unsigned char dbg_bits = DBG_BIT(PANIC) | DBG_BIT(CRIT);
 
 typedef struct SMMUState {
     uint32_t      regs[SMMU_NREGS];
-    uint32_t      id[10];
+    uint32_t      cid[4];
+    uint32_t      pid[8];
     uint32_t      mask[SMMU_NREGS];
     qemu_irq      irq;
     uint32_t      version;
@@ -72,7 +73,9 @@ typedef struct SMMUState {
 
     GHashTable   *iotlb;          /* IOTLB */
     MemoryRegion  iomem;
-    AddressSpace  as;
+
+    MemoryRegion  iommu;
+    AddressSpace  iommu_as;
 } SMMUState;
 
 typedef struct SMMUPciState{
@@ -115,7 +118,7 @@ static const MemoryRegionIOMMUOps smmu_ops = {
 static AddressSpace *smmu_pci_iommu(PCIBus *bus, void *opaque, int devfn)
 {
     SMMUState *s = opaque;
-    return &s->as;
+    return &s->iommu_as;
 }
 
 static uint64_t smmu_mem_read(void *opaque, hwaddr addr,
@@ -127,11 +130,11 @@ static uint64_t smmu_mem_read(void *opaque, hwaddr addr,
     SMMU_DPRINTF(CRIT, "Trying to read register %lx", addr);
 
     /* Primecell/Corelink ID registers */
-    if (addr > 0xFDC && addr < 0xFF0) {
-        return (uint64_t)s->id[(addr - 0xFDC)>>2];
-    }
-
     switch (addr) {
+    case 0xFF0 ... 0xFFC:
+        return (uint64_t)s->cid[(addr - 0xFF0)>>2];
+    case 0xFDC ... 0xFE4:
+        return (uint64_t)s->pid[(addr - 0xFDC)>>2];
     default:
         return s->regs[addr >> 2];
     }
@@ -147,24 +150,12 @@ static void smmu_mem_write(void *opaque, hwaddr addr,
 
     SMMU_DPRINTF(CRIT, "Trying to write:%lx to reg:%lx", val, addr);
 
-    if (addr <= SMMU_REG_IDR5) {
+    if (addr > 0xFDC) {
         SMMU_DPRINTF(CRIT, "Trying to write to read-only register %lx", addr);
         return;
     }
 
-    if (addr > 0xFDC && addr < 0xFF0) {
-        s->id[(addr - 0xFD0)>>2] = val32;
-        return;
-    }
-
     s->regs[addr>>2] = val32;
-
-    switch(addr) {
-
-    default:
-        SMMU_DPRINTF(PANIC, "Unsupported write to register %lx", addr);
-        break;
-    }
 }
 
 static const MemoryRegionOps smmu_mem_ops = {
@@ -189,13 +180,16 @@ static const VMStateDescription vmstate_smmu = {
 
 static void _smmu_populate_regs(SMMUState *s)
 {
+    int i;
+
     /* Primecell ID registers */
-    s->id[0] = 0x0D;
-    s->id[1] = 0xF0;
-    s->id[2] = 0x05;
-    s->id[3] = 0xB1;
-    s->id[6] = 0x1;
-    s->id[7] = 0x1;
+    s->cid[0] = 0x0D;
+    s->cid[1] = 0xF0;
+    s->cid[2] = 0x05;
+    s->cid[3] = 0xB1;
+
+    for (i = 0; i < sizeof(s->pid)/sizeof(s->pid[0]); i++)
+        s->pid[i] = 0x1;
 
     /* Only IDR0-5 will show what features supported */
     s->regs[SMMU_REG_IDR0] =
@@ -224,40 +218,49 @@ static void _smmu_populate_regs(SMMUState *s)
         1 << 6 |                    /* Granule 16K */
         1 << 4 |                    /* Granule 4K */
         4 << 0;                     /* OAS = 44 bits */
-
 }
 
 static void _smmu_realize(SMMUState *s, Error **errp)
 {
-    PCIBus *b = NULL;
-
-    SMMU_DPRINTF(INFO, "%s: loaded\n", TYPE_SMMU_DEV);
-
-    memory_region_init_io(&s->iomem, OBJECT(s), &smmu_mem_ops, s, "smmu",
-                          SMMU_NREGS * sizeof(uint32_t));
-
     /* Host memory as seen from the PCI side, via the IOMMU.  */
-    memory_region_init_iommu(&s->iomem, OBJECT(s), &smmu_ops, "smmuv3", UINT64_MAX);
-
     _smmu_populate_regs(s);
-
-    pci_setup_iommu(b, smmu_pci_iommu, s);
+    fprintf(stderr, "HERE ====> %s:%d\n", __func__, __LINE__);
 }
 
-static void smmu_realize(DeviceState *dev, Error **errp)
+static int smmu_init(SysBusDevice *dev)
 {
     SMMUSysState *sys = SMMU_SYS_DEV(dev);
+    Error *errp = NULL;
+    //MemoryRegion *addr_space = get_system_memory();
     SMMUState *s = &sys->smmu_state;
 
-    sysbus_init_irq(&sys->dev, &s->irq);
+    memory_region_init_iommu(&s->iommu, OBJECT(sys), &smmu_ops, "smmuv3", UINT64_MAX);
+    address_space_init(&s->iommu_as, &s->iommu, "smmu-as");
+#if 0
+    pci_setup_iommu(phb->bus, pci);
+#endif
 
-    _smmu_realize(&sys->smmu_state, errp);
+    _smmu_realize(&sys->smmu_state, &errp);
 
-    sysbus_init_mmio(&sys->dev, &s->iomem);
+    return 0;
+}
+
+static void smmu_instance_init(Object *obj)
+{
+    SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
+    SMMUSysState *sys = SMMU_SYS_DEV(sbd);
+    SMMUState *s = &sys->smmu_state;
+
+    fprintf(stderr, "HERE ====> %s:%d\n", __func__, __LINE__);
+    memory_region_init_io(&s->iomem, OBJECT(sys), &smmu_mem_ops, s, "smmuv3",
+                          0x1000);
+    sysbus_init_mmio(sbd, &s->iomem);
+    sysbus_init_irq(sbd, &s->irq);
 }
 
 static void smmu_reset(DeviceState *dev)
 {
+    fprintf(stderr, "HERE ====> %s\n", __func__);
 }
 
 static Property smmu_properties[] = {
@@ -269,9 +272,10 @@ static Property smmu_properties[] = {
 static void smmu_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
 
     dc->reset = smmu_reset;
-    dc->realize = smmu_realize;
+    k->init = smmu_init;
     dc->vmsd = &vmstate_smmu;
     dc->props = smmu_properties;
 
@@ -281,6 +285,7 @@ static const TypeInfo smmu_info = {
     .name          = TYPE_SMMU_DEV,
     .parent        = TYPE_SYS_BUS_DEVICE,
     .instance_size = sizeof(SMMUSysState),
+    .instance_init = smmu_instance_init,
     .class_init    = smmu_class_init,
 };
 
@@ -289,7 +294,10 @@ static const TypeInfo smmu_info = {
 static void smmu_pci_realize(PCIDevice *dev, Error **errp)
 {
     SMMUPciState *pci = SMMU_PCI_DEV(dev);
+    SMMUState *s = &pci->smmu_state;
+    PCIBus *b = NULL;
 
+    pci_setup_iommu(b, smmu_pci_iommu, s);
     _smmu_realize(&pci->smmu_state, errp);
 }
 
@@ -316,7 +324,7 @@ static void smmu_pci_class_init(ObjectClass *klass, void *data)
 }
 
 static const TypeInfo smmu_pci_info = {
-    .name          = "smmu-pci",
+    .name          = "smmuv3-pci",
     .parent        = TYPE_PCI_DEVICE,
     .instance_size = sizeof(SMMUPciState),
     .class_init    = smmu_pci_class_init,
