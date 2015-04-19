@@ -46,9 +46,11 @@ static unsigned char dbg_bits = DBG_BIT(PANIC) | DBG_BIT(CRIT);
 
 #define SMMU_DPRINTF(lvl, fmt, ...)     do {            \
         if (dbg_bits & DBG_BIT(lvl))                    \
-            fprintf(stderr, "(smmu)%s" fmt "\n",        \
+            fprintf(stderr, "(smmu)%s: " fmt "\n",      \
                     __func__, ## __VA_ARGS__);          \
     } while (0)
+
+#define HERE() fprintf(stderr, "HERE ====> %s:%d\n", __func__, __LINE__)
 #else
 #define SMMU_DPRINTF(lvl, fmt, ...) {}
 #endif
@@ -79,11 +81,14 @@ typedef struct SMMUState {
 } SMMUState;
 
 typedef struct SMMUPciState{
+    /* <private> */
     PCIDevice   dev;
+
     SMMUState   smmu_state;
 } SMMUPciState;
 
 typedef struct SMMUSysState {
+    /* <private> */
     SysBusDevice  dev;
     SMMUState     smmu_state;
 } SMMUSysState;
@@ -101,12 +106,12 @@ smmu_translate(MemoryRegion *iommu, hwaddr addr, bool is_write)
 {
     IOMMUTLBEntry ret = {
         .target_as = &address_space_memory,
-        .iova = 0,
-        .translated_addr = 0,
-        .addr_mask = ~(hwaddr)0,
-        .perm = IOMMU_NONE,
+        .iova = addr,
+        .translated_addr = addr,
+        .addr_mask = TARGET_PAGE_MASK,
+        .perm = IOMMU_RW,
     };
-
+    HERE();
     return ret;
 }
 
@@ -118,6 +123,7 @@ static const MemoryRegionIOMMUOps smmu_ops = {
 static AddressSpace *smmu_pci_iommu(PCIBus *bus, void *opaque, int devfn)
 {
     SMMUState *s = opaque;
+    HERE();
     return &s->iommu_as;
 }
 
@@ -220,42 +226,37 @@ static void _smmu_populate_regs(SMMUState *s)
         4 << 0;                     /* OAS = 44 bits */
 }
 
-static void _smmu_realize(SMMUState *s, Error **errp)
-{
-    /* Host memory as seen from the PCI side, via the IOMMU.  */
-    _smmu_populate_regs(s);
-    fprintf(stderr, "HERE ====> %s:%d\n", __func__, __LINE__);
-}
-
 static int smmu_init(SysBusDevice *dev)
 {
     SMMUSysState *sys = SMMU_SYS_DEV(dev);
-    Error *errp = NULL;
     //MemoryRegion *addr_space = get_system_memory();
     SMMUState *s = &sys->smmu_state;
 
-    memory_region_init_iommu(&s->iommu, OBJECT(sys), &smmu_ops, "smmuv3", UINT64_MAX);
-    address_space_init(&s->iommu_as, &s->iommu, "smmu-as");
+    PCIBus *pcibus = pci_find_primary_bus();
+
 #if 0
     pci_setup_iommu(phb->bus, pci);
 #endif
-
-    _smmu_realize(&sys->smmu_state, &errp);
-
-    return 0;
-}
-
-static void smmu_instance_init(Object *obj)
-{
-    SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
-    SMMUSysState *sys = SMMU_SYS_DEV(sbd);
-    SMMUState *s = &sys->smmu_state;
-
-    fprintf(stderr, "HERE ====> %s:%d\n", __func__, __LINE__);
+    HERE();
     memory_region_init_io(&s->iomem, OBJECT(sys), &smmu_mem_ops, s, "smmuv3",
                           0x1000);
-    sysbus_init_mmio(sbd, &s->iomem);
-    sysbus_init_irq(sbd, &s->irq);
+    HERE();
+    /* Host memory as seen from the PCI side, via the IOMMU.  */
+    _smmu_populate_regs(s);
+    HERE();
+    sysbus_init_mmio(dev, &s->iomem);
+    HERE();
+    sysbus_init_irq(dev, &s->irq);
+    HERE();
+
+    memory_region_init_iommu(&s->iommu, OBJECT(sys), &smmu_ops, "smmuv3", UINT64_MAX);
+
+    address_space_init(&s->iommu_as, &s->iommu, "smmu-as");
+
+    if (pcibus)
+        pci_setup_iommu(pcibus, smmu_pci_iommu, s);
+
+    return 0;
 }
 
 static void smmu_reset(DeviceState *dev)
@@ -285,20 +286,27 @@ static const TypeInfo smmu_info = {
     .name          = TYPE_SMMU_DEV,
     .parent        = TYPE_SYS_BUS_DEVICE,
     .instance_size = sizeof(SMMUSysState),
-    .instance_init = smmu_instance_init,
     .class_init    = smmu_class_init,
 };
 
 #define PCI_DEVICE_ID_BRCM_SMMU         0x9005
 
-static void smmu_pci_realize(PCIDevice *dev, Error **errp)
+static void smmu_pci_realize(PCIDevice *pci_dev, Error **errp)
 {
-    SMMUPciState *pci = SMMU_PCI_DEV(dev);
-    SMMUState *s = &pci->smmu_state;
+    SMMUPciState *pci_smmu = SMMU_PCI_DEV(pci_dev);
+    SMMUState *s = &pci_smmu->smmu_state;
     PCIBus *b = NULL;
+    uint8_t *pci_conf;
+
+    pci_conf = pci_dev->config;
+
+    pci_conf[PCI_INTERRUPT_PIN] = 1; /* interrupt pin A */
+
+    pci_register_bar(pci_dev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY, &s->iomem);
+
+    _smmu_populate_regs(&pci_smmu->smmu_state);
 
     pci_setup_iommu(b, smmu_pci_iommu, s);
-    _smmu_realize(&pci->smmu_state, errp);
 }
 
 static void smmu_pci_exit(PCIDevice *dev)
