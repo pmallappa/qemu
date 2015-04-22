@@ -94,6 +94,26 @@ typedef struct SMMUSysState {
 } SMMUSysState;
 
 
+static IOMMUTLBEntry
+smmu_translate_dev(DeviceState *dev, MemoryRegion *iommu,
+		 hwaddr addr, bool is_write)
+{
+    IOMMUTLBEntry ret = {
+        .target_as = &address_space_memory,
+        .iova = addr,
+        .translated_addr = addr,
+        .addr_mask = TARGET_PAGE_MASK,
+        .perm = IOMMU_NONE,
+    };
+
+    ret.perm = is_write ? IOMMU_WO: IOMMU_RO;
+
+    //fprintf(stderr, "DeviceID is %x\n", );
+    HERE();
+
+    return ret;
+}
+
 /*
  * smmu_translate: this is called when device does a
  * pci_dma_{read,write}() or similar
@@ -109,14 +129,17 @@ smmu_translate(MemoryRegion *iommu, hwaddr addr, bool is_write)
         .iova = addr,
         .translated_addr = addr,
         .addr_mask = TARGET_PAGE_MASK,
-        .perm = IOMMU_RW,
+        .perm = IOMMU_NONE,
     };
-    HERE();
+
+    ret.perm = is_write ? IOMMU_WO: IOMMU_RO;
+
     return ret;
 }
 
 static const MemoryRegionIOMMUOps smmu_ops = {
     .translate = smmu_translate,
+    .translate_dev = smmu_translate_dev,
 };
 
 
@@ -133,7 +156,7 @@ static uint64_t smmu_mem_read(void *opaque, hwaddr addr,
     uint32_t ret;
     SMMUState *s = opaque;
 
-    SMMU_DPRINTF(CRIT, "Trying to read register %lx", addr);
+    SMMU_DPRINTF(CRIT, "read %lx", addr);
 
     /* Primecell/Corelink ID registers */
     switch (addr) {
@@ -154,7 +177,7 @@ static void smmu_mem_write(void *opaque, hwaddr addr,
     SMMUState *s = opaque;
     uint32_t val32 = (uint32_t)val;
 
-    SMMU_DPRINTF(CRIT, "Trying to write:%lx to reg:%lx", val, addr);
+    SMMU_DPRINTF(CRIT, "reg:%lx = %lx", addr, val);
 
     if (addr > 0xFDC) {
         SMMU_DPRINTF(CRIT, "Trying to write to read-only register %lx", addr);
@@ -229,27 +252,24 @@ static void _smmu_populate_regs(SMMUState *s)
 static int smmu_init(SysBusDevice *dev)
 {
     SMMUSysState *sys = SMMU_SYS_DEV(dev);
-    //MemoryRegion *addr_space = get_system_memory();
     SMMUState *s = &sys->smmu_state;
-
     PCIBus *pcibus = pci_find_primary_bus();
 
-#if 0
-    pci_setup_iommu(phb->bus, pci);
-#endif
     HERE();
-    memory_region_init_io(&s->iomem, OBJECT(sys), &smmu_mem_ops, s, "smmuv3",
-                          0x1000);
-    HERE();
+    /* Register Access */
+    memory_region_init_io(&s->iomem, OBJECT(sys), &smmu_mem_ops,
+                          s, "smmuv3", 0x1000);
+
     /* Host memory as seen from the PCI side, via the IOMMU.  */
     _smmu_populate_regs(s);
-    HERE();
-    sysbus_init_mmio(dev, &s->iomem);
-    HERE();
-    sysbus_init_irq(dev, &s->irq);
-    HERE();
 
-    memory_region_init_iommu(&s->iommu, OBJECT(sys), &smmu_ops, "smmuv3", UINT64_MAX);
+    sysbus_init_mmio(dev, &s->iomem);
+
+    sysbus_init_irq(dev, &s->irq);
+
+    /* Host Memory Access */
+    memory_region_init_iommu(&s->iommu, OBJECT(sys), &smmu_ops,
+                             "smmuv3", UINT64_MAX);
 
     address_space_init(&s->iommu_as, &s->iommu, "smmu-as");
 
@@ -261,7 +281,7 @@ static int smmu_init(SysBusDevice *dev)
 
 static void smmu_reset(DeviceState *dev)
 {
-    fprintf(stderr, "HERE ====> %s\n", __func__);
+    HERE();
 }
 
 static Property smmu_properties[] = {
