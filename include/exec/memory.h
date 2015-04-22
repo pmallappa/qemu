@@ -131,6 +131,8 @@ typedef struct MemoryRegionIOMMUOps MemoryRegionIOMMUOps;
 struct MemoryRegionIOMMUOps {
     /* Return a TLB entry that contains a given address. */
     IOMMUTLBEntry (*translate)(MemoryRegion *iommu, hwaddr addr, bool is_write);
+    IOMMUTLBEntry (*translate_dev)(DeviceState *dev, MemoryRegion *iommu,
+					hwaddr addr, bool is_write);
 };
 
 typedef struct CoalescedMemoryRange CoalescedMemoryRange;
@@ -1066,6 +1068,8 @@ void address_space_destroy(AddressSpace *as);
 bool address_space_rw(AddressSpace *as, hwaddr addr, uint8_t *buf,
                       int len, bool is_write);
 
+bool address_space_rw_dev(DeviceState *dev, AddressSpace *as, hwaddr addr,
+			 uint8_t *buf, int len, bool is_write);
 /**
  * address_space_write: write to address space.
  *
@@ -1102,6 +1106,10 @@ bool address_space_read(AddressSpace *as, hwaddr addr, uint8_t *buf, int len);
  * @is_write: indicates the transfer direction
  */
 MemoryRegion *address_space_translate(AddressSpace *as, hwaddr addr,
+                                      hwaddr *xlat, hwaddr *len,
+                                      bool is_write);
+
+MemoryRegion *address_space_translate_dev(DeviceState *dev, AddressSpace *as, hwaddr addr,
                                       hwaddr *xlat, hwaddr *len,
                                       bool is_write);
 

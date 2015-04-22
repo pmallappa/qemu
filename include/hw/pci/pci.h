@@ -671,6 +671,25 @@ static inline AddressSpace *pci_get_address_space(PCIDevice *dev)
     return &dev->bus_master_as;
 }
 
+static inline int pci_dma_rw_dev(PCIDevice *dev, dma_addr_t addr,
+                                 void *buf, dma_addr_t len, DMADirection dir)
+{
+    dma_memory_rw_dev(DEVICE(dev), pci_get_address_space(dev), addr, buf, len, dir);
+    return 0;
+}
+
+static inline int pci_dma_read_dev(PCIDevice *dev, dma_addr_t addr,
+                               void *buf, dma_addr_t len)
+{
+    return pci_dma_rw_dev(dev, addr, buf, len, DMA_DIRECTION_TO_DEVICE);
+}
+
+static inline int pci_dma_write_dev(PCIDevice *dev, dma_addr_t addr,
+                                const void *buf, dma_addr_t len)
+{
+    return pci_dma_rw_dev(dev, addr, (void *) buf, len, DMA_DIRECTION_FROM_DEVICE);
+}
+
 static inline int pci_dma_rw(PCIDevice *dev, dma_addr_t addr,
                              void *buf, dma_addr_t len, DMADirection dir)
 {
