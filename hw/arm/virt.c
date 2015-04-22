@@ -836,8 +836,6 @@ static void machvirt_init(MachineState *machine)
 
     create_rtc(vbi, pic);
 
-    create_smmu(vbi, pic);
-
     create_pcie(vbi, pic, gic_phandle);
 
     create_smmu(vbi, pic);
