@@ -38,11 +38,11 @@
 #define ARM_SMMU_DEBUG
 #ifdef ARM_SMMU_DEBUG
 
-enum {SMMU_DBG_PANIC, SMMU_DBG_CRIT, SMMU_DBG_WARN, SMMU_DBG_INFO};
+enum {SMMU_DBG_PANIC, SMMU_DBG_CRIT, SMMU_DBG_WARN, SMMU_DBG_DEBUG, SMMU_DBG_INFO};
 
 #define DBG_BIT(bit)    (1 << SMMU_DBG_##bit)
 
-static unsigned char dbg_bits = DBG_BIT(PANIC) | DBG_BIT(CRIT);
+static unsigned char dbg_bits = DBG_BIT(PANIC) | DBG_BIT(CRIT) | DBG_BIT(DEBUG);
 
 #define SMMU_DPRINTF(lvl, fmt, ...)     do {            \
         if (dbg_bits & DBG_BIT(lvl))                    \
@@ -52,7 +52,7 @@ static unsigned char dbg_bits = DBG_BIT(PANIC) | DBG_BIT(CRIT);
 
 #define HERE() fprintf(stderr, "HERE ====> %s:%d\n", __func__, __LINE__)
 #else
-#define SMMU_DPRINTF(lvl, fmt, ...) {}
+#define SMMU_DPRINTF(lvl, fmt, ...)
 #endif
 
 #define TYPE_SMMU_DEV "smmuv3"
@@ -61,29 +61,36 @@ static unsigned char dbg_bits = DBG_BIT(PANIC) | DBG_BIT(CRIT);
 #define SMMU_SYS_DEV(obj) OBJECT_CHECK(SMMUSysState, (obj), TYPE_SMMU_DEV)
 #define SMMU_PCI_DEV(obj) OBJECT_CHECK(SMMUPciState, (obj), TYPE_SMMU_DEV)
 
+struct SMMUQueue {
+    hwaddr    base;
+    uint32_t  size;
+
+    uint16_t  prod;
+    uint16_t  cons;
+};
 
 typedef struct SMMUState {
-    uint32_t      regs[SMMU_NREGS];
-    uint32_t      cid[4];
-    uint32_t      pid[8];
-    uint32_t      mask[SMMU_NREGS];
-    qemu_irq      irq;
-    uint32_t      version;
+    uint8_t          regs[SMMU_NREGS * sizeof(uint32_t)];
+    uint32_t         cid[4];    /* Coresight registers */
+    uint32_t         pid[8];    /* ---"---- */
 
-    bool          virtual;
-    bool          in_line;
+    qemu_irq         irq;
+    uint32_t         version;
 
-    GHashTable   *iotlb;          /* IOTLB */
-    MemoryRegion  iomem;
+    bool             virtual;
+    bool             in_line;
 
-    MemoryRegion  iommu;
-    AddressSpace  iommu_as;
+    struct SMMUQueue cmdq, evtq;
+
+    MemoryRegion     iomem;
+
+    MemoryRegion     iommu;
+    AddressSpace     iommu_as;
 } SMMUState;
 
 typedef struct SMMUPciState{
     /* <private> */
     PCIDevice   dev;
-
     SMMUState   smmu_state;
 } SMMUPciState;
 
@@ -93,11 +100,79 @@ typedef struct SMMUSysState {
     SMMUState     smmu_state;
 } SMMUSysState;
 
+static inline int smmu_enabled(SMMUState *s)
+{
+    return s->regs[SMMU_REG_CR0] & SMMU_CR0_SMMU_ENABLE;
+}
+
+static inline int smmu_q_enabled(SMMUState *s, uint32_t q)
+{
+    return s->regs[SMMU_REG_CR0] & q;
+}
+
+#define smmu_cmd_q_enabled(s) smmu_q_enabled(s, SMMU_CR0_CMDQ_ENABLE)
+#define smmu_evt_q_enabled(s) smmu_q_enabled(s, SMMU_CR0_EVTQ_ENABLE)
+
+static uint32_t smmu_read32_reg(SMMUState *s, uint32_t reg)
+{
+    uint64_t *ptr;
+    ptr = (uint64_t *)&s->regs[reg];
+    return *ptr;
+}
+
+static void smmu_write32_reg(SMMUState *s, uint32_t reg, uint32_t val)
+{
+    uint32_t *ptr;
+    ptr = (uint32_t *)&s->regs[reg];
+    *ptr = val;
+}
+
+static uint64_t smmu_read64_reg(SMMUState *s, uint64_t reg)
+{
+    uint64_t *ptr;
+    ptr = (uint64_t *)&s->regs[reg];
+    return *ptr;
+}
+static void smmu_write64_reg(SMMUState *s, uint64_t reg, uint64_t val)
+{
+    uint64_t *ptr;
+    ptr = (uint64_t *)&s->regs[reg];
+    *ptr = val;
+}
+
+static uint16_t smmu_find_sid(DeviceState *dev)
+{
+    PCIDevice *pcidev = container_of(dev, PCIDevice, qdev);
+    return pci_get_arid(pcidev);
+}
+
+static cd_t *smmu_get_cd(SMMUState *s, ste_t *ste, uint32_t ssid)
+{
+    return NULL;
+}
+
+static ste_t * smmu_find_ste(SMMUState *s, uint16_t sid)
+{
+    ste_t *ste = NULL;
+#if 0
+    if (ste_lvl2(s)) {
+
+    } else {
+
+    }
+#endif
+    return ste;
+}
 
 static IOMMUTLBEntry
 smmu_translate_dev(DeviceState *dev, MemoryRegion *iommu,
-		 hwaddr addr, bool is_write)
+                   hwaddr addr, bool is_write)
 {
+    uint16_t sid;
+    ste_t *ste;
+    cd_t *cd;
+    SMMUState *s = container_of(iommu, SMMUState, iommu);
+
     IOMMUTLBEntry ret = {
         .target_as = &address_space_memory,
         .iova = addr,
@@ -106,11 +181,35 @@ smmu_translate_dev(DeviceState *dev, MemoryRegion *iommu,
         .perm = IOMMU_NONE,
     };
 
+    /* We allow traffic through if SMMU is disabled */
+    if (!smmu_enabled(s)) {
+        SMMU_DPRINTF(CRIT, "SMMU Not enabled\n");
+        goto fixout;
+    }
+
+    sid = smmu_find_sid(dev);
+    SMMU_DPRINTF(CRIT, "SID:%x\n", sid);
+
+    ste = smmu_find_ste(s, sid);
+    if (!ste || !STE_VALID(ste))
+        goto out;
+
+    switch(STE_CONFIG(ste)) {
+    case STE_CONFIG_S1BY_S2BY:
+        goto fixout;
+    case STE_CONFIG_S1TR_S2BY:
+        cd = smmu_get_cd(s, ste, 0); /* We dont have SSID, so 0 */
+        cd = cd;
+        break;
+    default:
+        break;
+    }
+
+ fixout:
+    /* After All check is done, we do allow Read/Write */
     ret.perm = is_write ? IOMMU_WO: IOMMU_RO;
 
-    //fprintf(stderr, "DeviceID is %x\n", );
-    HERE();
-
+ out:
     return ret;
 }
 
@@ -150,46 +249,197 @@ static AddressSpace *smmu_pci_iommu(PCIBus *bus, void *opaque, int devfn)
     return &s->iommu_as;
 }
 
-static uint64_t smmu_mem_read(void *opaque, hwaddr addr,
+static uint64_t smmu_read_mmio(void *opaque, hwaddr addr,
                               unsigned size)
 {
-    uint32_t ret;
     SMMUState *s = opaque;
-
-    SMMU_DPRINTF(CRIT, "read %lx", addr);
+    uint64_t val;
 
     /* Primecell/Corelink ID registers */
     switch (addr) {
     case 0xFF0 ... 0xFFC:
-        return (uint64_t)s->cid[(addr - 0xFF0)>>2];
+        val = (uint64_t)s->cid[(addr - 0xFF0)>>2]; break;
+
     case 0xFDC ... 0xFE4:
-        return (uint64_t)s->pid[(addr - 0xFDC)>>2];
+        val = (uint64_t)s->pid[(addr - 0xFDC)>>2]; break;
+
     default:
-        return s->regs[addr >> 2];
+    case SMMU_REG_IDR0 ... SMMU_REG_GERROR_IRQ_CFG1:
+        val = (uint64_t)smmu_read32_reg(s, addr); break;
+
+    case SMMU_REG_STRTAB_BASE ... SMMU_REG_CMDQ_BASE:
+    case SMMU_REG_EVTQ_BASE:
+    case SMMU_REG_PRIQ_BASE ... SMMU_REG_PRIQ_IRQ_CFG1:
+        val = smmu_read64_reg(s, addr); break;
     }
 
-    return ret;
+    SMMU_DPRINTF(CRIT, "addr: %lx val:%lx",addr, val);
+    return val;
 }
 
-static void smmu_mem_write(void *opaque, hwaddr addr,
+static int smmu_read_sysmem(SMMUState *s, hwaddr addr,
+                            void *buf, dma_addr_t len)
+{
+    return address_space_rw(&s->iommu_as, addr, buf,
+                            len, false);
+
+}
+
+static int smmu_evtq_update(SMMUState *s)
+{
+    return 0;
+}
+
+static int smmu_cmdq_consume(SMMUState *s)
+{
+    struct SMMUQueue *q = &s->cmdq;
+    uint64_t head, tail;
+    uint32_t error = 0;
+    bool wrap = false;
+
+    head = smmu_read32_reg(s, SMMU_REG_CMDQ_PROD);
+    tail = smmu_read32_reg(s, SMMU_REG_CMDQ_CONS);
+
+    //head_wrap = head & (1 << q->prod);
+    //tail_wrap = tail & (1 << q->cons);
+
+    head &= ~(1 << q->size);
+    tail &= ~(1 << q->size);
+
+    SMMU_DPRINTF(DEBUG, "q->size:%d head:%lx, tail:%lx\n", q->size, head, tail);
+
+    while (tail != head) {
+        cmd_t cmd;
+        hwaddr addr = q->base + (sizeof(cmd) * tail);
+
+        if (smmu_read_sysmem(s, addr, &cmd, sizeof(cmd)))
+            return -1;
+
+        dump_cmd(&cmd);
+
+        switch(CMD_TYPE(&cmd)) {
+        default:                /* Check if we are coming here */
+            SMMU_DPRINTF(DEBUG, "Reading Command @idx:%lx\n", tail);
+            break;
+        }
+
+        tail++;
+        if (tail == (1 << q->size)) {
+            SMMU_DPRINTF(CRIT, "TAIL: wrapped\n");
+            tail = 0;
+            wrap = true;
+        }
+    }
+
+    if (error)
+        tail |= error << 24;
+
+    if (wrap)
+        tail |= 1 << (q->size + 1);
+
+    SMMU_DPRINTF(DEBUG, "head:%lx, tail:%lx\n", head, tail);
+
+    /* Update tail pointer */
+    smmu_write32_reg(s, SMMU_REG_CMDQ_CONS, tail);
+
+    return 0;
+}
+
+static void smmu_update(SMMUState *s)
+{
+    /* Sanity check, do nothing if not enabled */
+    if (!smmu_enabled(s)) {
+        SMMU_DPRINTF(CRIT, "NOT ENABLED\n");
+        return;
+    }
+
+    /* EVENT Q updates takes more priority */
+    if (smmu_evt_q_enabled(s) && smmu_evtq_update(s)) {
+    }
+
+    if (smmu_cmd_q_enabled(s) && smmu_cmdq_consume(s)) {
+        /* Result in Error if not returned with 0 */
+    }
+}
+
+static void smmu_write_mmio(void *opaque, hwaddr addr,
                            uint64_t val, unsigned size)
 {
     SMMUState *s = opaque;
+    struct SMMUQueue *q = NULL;
+    bool check_queue = false;
     uint32_t val32 = (uint32_t)val;
 
-    SMMU_DPRINTF(CRIT, "reg:%lx = %lx", addr, val);
+    SMMU_DPRINTF(DEBUG, "reg:%lx cur: %lx new: %lx", addr,
+                 smmu_read_mmio(opaque, addr, size), val);
 
-    if (addr > 0xFDC) {
+    switch (addr) {
+    case SMMU_REG_IRQ_CTRL:     /* Update the ACK as well */
+    case SMMU_REG_CR0:
+        smmu_write32_reg(s, addr, val32);
+        smmu_write32_reg(s, addr + 4, val32);
+        return;
+    case SMMU_REG_STATUSR:
+        break;
+    case SMMU_REG_CMDQ_BASE ... SMMU_REG_CMDQ_CONS:
+        q = &s->cmdq; break;
+    case SMMU_REG_EVTQ_BASE ... SMMU_REG_EVTQ_IRQ_CFG1:
+        q = &s->evtq; break;
+    case SMMU_REG_STRTAB_BASE ... SMMU_REG_STRTAB_BASE_CFG:
+        break;
+    case SMMU_REG_PRIQ_BASE ... SMMU_REG_PRIQ_IRQ_CFG1:
+        SMMU_DPRINTF(CRIT, "Trying to write to PRIQ, not implemented\n");
+        break;
+    default:
+    case 0xFDC ... 0xFFC:
+    case SMMU_REG_IDR0 ... SMMU_REG_IDR5:
         SMMU_DPRINTF(CRIT, "Trying to write to read-only register %lx", addr);
         return;
     }
 
-    s->regs[addr>>2] = val32;
+    switch (addr) {
+    case SMMU_REG_STRTAB_BASE:
+    case SMMU_REG_STRTAB_BASE_CFG:
+    case SMMU_REG_CMDQ_BASE:
+    case SMMU_REG_EVTQ_IRQ_CFG0:
+    case SMMU_REG_EVTQ_IRQ_CFG1:
+    case SMMU_REG_PRIQ_BASE:
+        smmu_write64_reg(s, addr, val); break;
+    default:
+        smmu_write32_reg(s, addr, val32); break;
+    }
+
+    if (q) {
+        switch (addr)  {
+        case SMMU_REG_CMDQ_BASE:
+        case SMMU_REG_EVTQ_BASE:
+            q->base = val & ~0x1f;
+            q->size = val & 0x1f;
+            break;
+        case SMMU_REG_CMDQ_PROD:
+            check_queue = 1;
+        case SMMU_REG_EVTQ_PROD:
+            q->prod = val & ~(1 << q->size);
+            break;
+        case SMMU_REG_EVTQ_CONS:
+            check_queue = 1;
+        case SMMU_REG_CMDQ_CONS:
+            q->cons = val & ~(1 << q->size);
+            break;
+        }
+    }
+
+    if (check_queue) {
+        if (smmu_cmd_q_enabled(s) && smmu_cmdq_consume(s)) {
+            /* Result in Error if not returned with 0 */
+        }
+        smmu_update(s);
+    }
 }
 
 static const MemoryRegionOps smmu_mem_ops = {
-    .read = smmu_mem_read,
-    .write = smmu_mem_write,
+    .read = smmu_read_mmio,
+    .write = smmu_write_mmio,
     .endianness = DEVICE_LITTLE_ENDIAN,
     .valid = {
         .min_access_size = 4,
@@ -202,7 +452,7 @@ static const VMStateDescription vmstate_smmu = {
     .version_id = 1,
     .minimum_version_id = 1,
     .fields = (VMStateField[]) {
-        VMSTATE_UINT32_ARRAY(regs, SMMUState, SMMU_NREGS),
+        VMSTATE_UINT8_ARRAY(regs, SMMUState, SMMU_NREGS * sizeof(uint32_t)),
         VMSTATE_END_OF_LIST(),
     }
 };
@@ -210,6 +460,7 @@ static const VMStateDescription vmstate_smmu = {
 static void _smmu_populate_regs(SMMUState *s)
 {
     int i;
+    uint32_t val;
 
     /* Primecell ID registers */
     s->cid[0] = 0x0D;
@@ -221,7 +472,7 @@ static void _smmu_populate_regs(SMMUState *s)
         s->pid[i] = 0x1;
 
     /* Only IDR0-5 will show what features supported */
-    s->regs[SMMU_REG_IDR0] =
+    val =
         1 << 27 |                   /* 2 Level stream id */
         1 << 26 |                   /* Term Model  */
         1 << 24 |                   /* Stall model not supported */
@@ -236,17 +487,29 @@ static void _smmu_populate_regs(SMMUState *s)
         1 << 1 |                    /* Stage 1 */
         1 << 0;                     /* Stage 2 */
 
-    s->regs[SMMU_REG_IDR1] =
-        1 << 27 |                   /* Attr Types override */
-        19 << 21|                   /* Cmd Q size */
-        19 << 16|                   /* Event Q size */
-        19 << 11|                   /* PRI Q size */
-        16 << 0 ;                   /* SID size (SSID not supported) */
+    smmu_write32_reg(s, SMMU_REG_IDR0, val);
 
-        s->regs[SMMU_REG_IDR5] =
+#define SMMU_QUEUE_SIZE_LOG2 19
+
+    val =
+        1 << 27 |                   /* Attr Types override */
+        SMMU_QUEUE_SIZE_LOG2 << 21| /* Cmd Q size */
+        SMMU_QUEUE_SIZE_LOG2 << 16| /* Event Q size */
+        SMMU_QUEUE_SIZE_LOG2 << 11| /* PRI Q size */
+        0  << 6 |                   /* SSID not supported */
+        16 << 0 ;                   /* SID size  */
+
+    smmu_write32_reg(s, SMMU_REG_IDR1, val);
+
+    val =
         1 << 6 |                    /* Granule 16K */
         1 << 4 |                    /* Granule 4K */
         4 << 0;                     /* OAS = 44 bits */
+
+    smmu_write32_reg(s, SMMU_REG_IDR5, val);
+
+    s->cmdq.size = (smmu_read32_reg(s, SMMU_REG_IDR1) >> 21) & 0x1f;
+    s->evtq.size = (smmu_read32_reg(s, SMMU_REG_IDR1) >> 16) & 0x1f;
 }
 
 static int smmu_init(SysBusDevice *dev)
