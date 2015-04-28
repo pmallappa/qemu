@@ -130,7 +130,7 @@ static const MemMapEntry a15memmap[] = {
     [VIRT_UART] =       { 0x09000000, 0x00001000 },
     [VIRT_RTC] =        { 0x09010000, 0x00001000 },
     [VIRT_FW_CFG] =     { 0x09020000, 0x0000000a },
-    [VIRT_SMMU] =       { 0x09021000, 0x00001000 },
+    [VIRT_SMMU] =       { 0x09021000, 0x00020000 },  /* Need 128K */
     [VIRT_MMIO] =       { 0x0a000000, 0x00000200 },
     /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
     /*
@@ -433,7 +433,7 @@ static void create_smmu(const VirtBoardInfo *vbi, qemu_irq *pic)
     hwaddr base = vbi->memmap[VIRT_SMMU].base;
     hwaddr size = vbi->memmap[VIRT_SMMU].size;
     int irq = vbi->irqmap[VIRT_RTC];
-    const char compat[] = "brcm,smmuv3\0arm,primecell";
+    const char compat[] = "arm,smmu-v3";
 
     sysbus_create_simple("smmuv3", base, pic[irq]);
 
