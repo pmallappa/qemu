@@ -493,6 +493,12 @@ pci_config_set_interrupt_pin(uint8_t *pci_config, uint8_t val)
     pci_set_byte(&pci_config[PCI_INTERRUPT_PIN], val);
 }
 
+static inline uint16_t
+pci_get_arid(PCIDevice *pcidev)
+{
+	uint16_t busnum = (pci_bus_num(pcidev->bus)) & 0xff << 8;
+	return busnum | (pcidev->devfn & 0x7); 
+}
 /*
  * helper functions to do bit mask operation on configuration space.
  * Just to set bit, use test-and-set and discard returned value.

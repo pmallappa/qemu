@@ -725,7 +725,7 @@ process_tx_desc(E1000State *s, struct e1000_tx_desc *dp)
                 bytes = msh - tp->size;
 
             bytes = MIN(sizeof(tp->data) - tp->size, bytes);
-            pci_dma_read(d, addr, tp->data + tp->size, bytes);
+            pci_dma_read_dev(d, addr, tp->data + tp->size, bytes);
             sz = tp->size + bytes;
             if (sz >= tp->hdr_len && tp->size < tp->hdr_len) {
                 memmove(tp->header, tp->data, tp->hdr_len);
@@ -743,7 +743,7 @@ process_tx_desc(E1000State *s, struct e1000_tx_desc *dp)
         DBGOUT(TXERR, "TCP segmentation error\n");
     } else {
         split_size = MIN(sizeof(tp->data) - tp->size, split_size);
-        pci_dma_read(d, addr, tp->data + tp->size, split_size);
+        pci_dma_read_dev(d, addr, tp->data + tp->size, split_size);
         tp->size += split_size;
     }
 
@@ -770,7 +770,7 @@ txdesc_writeback(E1000State *s, dma_addr_t base, struct e1000_tx_desc *dp)
     txd_upper = (le32_to_cpu(dp->upper.data) | E1000_TXD_STAT_DD) &
                 ~(E1000_TXD_STAT_EC | E1000_TXD_STAT_LC | E1000_TXD_STAT_TU);
     dp->upper.data = cpu_to_le32(txd_upper);
-    pci_dma_write(d, base + ((char *)&dp->upper - (char *)dp),
+    pci_dma_write_dev(d, base + ((char *)&dp->upper - (char *)dp),
                   &dp->upper, sizeof(dp->upper));
     return E1000_ICR_TXDW;
 }
@@ -799,7 +799,7 @@ start_xmit(E1000State *s)
     while (s->mac_reg[TDH] != s->mac_reg[TDT]) {
         base = tx_desc_base(s) +
                sizeof(struct e1000_tx_desc) * s->mac_reg[TDH];
-        pci_dma_read(d, base, &desc, sizeof(desc));
+        pci_dma_read_dev(d, base, &desc, sizeof(desc));
 
         DBGOUT(TX, "index %d: %p : %x %x\n", s->mac_reg[TDH],
                (void *)(intptr_t)desc.buffer_addr, desc.lower.data,
@@ -1021,7 +1021,7 @@ e1000_receive_iov(NetClientState *nc, const struct iovec *iov, int iovcnt)
             desc_size = s->rxbuf_size;
         }
         base = rx_desc_base(s) + sizeof(desc) * s->mac_reg[RDH];
-        pci_dma_read(d, base, &desc, sizeof(desc));
+        pci_dma_read_dev(d, base, &desc, sizeof(desc));
         desc.special = vlan_special;
         desc.status |= (vlan_status | E1000_RXD_STAT_DD);
         if (desc.buffer_addr) {
@@ -1034,7 +1034,7 @@ e1000_receive_iov(NetClientState *nc, const struct iovec *iov, int iovcnt)
                 }
                 do {
                     iov_copy = MIN(copy_size, iov->iov_len - iov_ofs);
-                    pci_dma_write(d, ba, iov->iov_base + iov_ofs, iov_copy);
+                    pci_dma_write_dev(d, ba, iov->iov_base + iov_ofs, iov_copy);
                     copy_size -= iov_copy;
                     ba += iov_copy;
                     iov_ofs += iov_copy;
@@ -1056,7 +1056,7 @@ e1000_receive_iov(NetClientState *nc, const struct iovec *iov, int iovcnt)
         } else { // as per intel docs; skip descriptors with null buf addr
             DBGOUT(RX, "Null RX descriptor!!\n");
         }
-        pci_dma_write(d, base, &desc, sizeof(desc));
+        pci_dma_write_dev(d, base, &desc, sizeof(desc));
 
         if (++s->mac_reg[RDH] * sizeof(desc) >= s->mac_reg[RDLEN])
             s->mac_reg[RDH] = 0;
