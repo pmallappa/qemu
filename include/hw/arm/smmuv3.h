@@ -24,9 +24,6 @@
 #include "hw/qdev.h"
 #include "sysemu/dma.h"
 
-typedef uint32_t u32;
-typedef uint64_t u64;
-
 #define GENMASK(h, l)                                           \
     (((~0UL) << (l)) & (~0UL >> (BITS_PER_LONG - 1 - (h))))
 
@@ -83,69 +80,17 @@ enum {
     SMMU_SECURE_OFFSET       = 0x8000,
 };
 
-
-#define	ARM_SMMUV_NO                 (1 << 0)
-#define	ARM_SMMUV3_S1BYPASS_S2BYPASS (1 << 1)
-#define	ARM_SMMUV3_S1TRANS_S2BYPASS  (1 << 2)
-#define	ARM_SMMUV3_S1BYPASS_S2TRANS  (1 << 3)
-#define	ARM_SMMUV3_S1TRANS_S2TRANS   (1 << 4)
-
-
-/* IDR0 Bits */
-#define SMMU_IDR0_S2P		 (1 << 0)
-#define SMMU_IDR0_S1P		 (1 << 1)
-#define SMMU_IDR0_TT_FMT	 (3 << 2)
-#define SMMU_IDR0_COHERENT	 (1 << 4)
-//#define SMMU_IDR0_ST_TBL_LVL     (3 << 27)
-#define SMMU_IDR0_ATS		 (1 << 10)
-//#define SMMU_IDR0_PERF_CNT	 (1 << 11)
-#define SMMU_IDR0_ASID16	 (1 << 12)
-#define SMMU_IDR0_MSI		 (1 << 13)
-//#define SMMU_IDR0_SEV		 (1 << 14)
-//#define SMMU_IDR0_ATOS		 (1 << 15)
-#define SMMU_IDR0_PRI		 (1 << 16)
-//#define SMMU_IDR0_VMW		 (1 << 17)
-#define SMMU_IDR0_VMID16	 (1 << 18)
-#define SMMU_IDR0_CD_2LVL	 (1 << 19)
-
-/* IDR1 Bits */
-#define SMMU_IDR1_NR_Q_BITS     5
-#define SMMU_IDR1_CMD_Q_SHIFT   21
-#define SMMU_IDR1_EVENT_Q_SHIFT 16
-#define SMMU_IDR1_PRI_Q_SHIFT   11
-#define SMMU_IDR1_CMD_Q_MASK    (__SMMU_MASK(SMMU_IDR1_NR_Q_BITS) <<    \
-                                 SMMU_IDR1_CMD_Q_SHIFT)
-#define SMMU_IDR1_EVENT_Q_MASK  (__SMMU_MASK(SMMU_IDR1_NR_Q_BITS) <<    \
-                                 SMMU_IDR1_EVENT_Q_SHIFT)
-#define SMMU_IDR1_PRI_Q_MASK    (__SMMU_MASK(SMMU_IDR1_NR_Q_BITS) <<    \
-                                 SMMU_IDR1_PRI_Q_SHIFT)
-#define SMMU_IDR1_Q_SZ(idr, q)	  ((idr & SMMU_IDR1_##q##_Q_MASK) >>	\
-				   SMMU_IDR1_##q##_Q_SHIFT)
-
-#define SMMU_IDR1_SSID_SHIFT	6
-#define SMMU_IDR1_SSID_SZ_MASK	(0x1f << SMMU_IDR1_SSID_SHIFT)
-#define SMMU_IDR1_SID_SZ_MASK	(0x3f << 0)
-
-
-#define SMMU_IDR5_STALL_MAX	(0xffffU << 16)
-#define SMMU_IDR5_GRANL_BITS	3
-#define SMMU_IDR5_GRANL_SHIFT	4
-#define SMMU_IDR5_GRANL_MASK	(__SMMU_MASK(SMMU_IDR5_GRANL_BITS) <<   \
-				 SMMU_IDR5_GRANL_SHIFT)
-#define SMMU_IDR5_OAS_MASK	(0x7 << 0)
-
-
 /* IRQ Bits */
 #define SMMU_IRQ_CTRL_GERROR_EN (1 << 0)
 #define SMMU_IRQ_CTRL_EVENT_EN  (1 << 1)
 #define SMMU_IRQ_CTRL_PRI_EN    (1 << 2)
 
 /* CR0 Bits */
-#define SMMU_CR0_SMMU_ENABLE           (1 << 0)
-#define SMMU_CR0_PRIQ_ENABLE           (1 << 1)
-#define SMMU_CR0_EVENTQ_ENABLE         (1 << 2)
-#define SMMU_CR0_CMDQ_ENABLE           (1 << 3)
-#define SMMU_CR0_ATS_CHECK             (1 << 4)
+#define SMMU_CR0_SMMU_ENABLE (1 << 0)
+#define SMMU_CR0_PRIQ_ENABLE (1 << 1)
+#define SMMU_CR0_EVTQ_ENABLE (1 << 2)
+#define SMMU_CR0_CMDQ_ENABLE (1 << 3)
+#define SMMU_CR0_ATS_CHECK   (1 << 4)
 
 
 /*****************************
@@ -158,25 +103,25 @@ enum {
     SMMU_CMD_CFGI_STE_RANGE,
     SMMU_CMD_CFGI_CD,
     SMMU_CMD_CFGI_CD_ALL,
-    SMMU_CMD_CFGI_ALL	= 0x9, /* alias to STE_RANGE with 0 */
-    SMMU_CMD_TLBI_NH_ALL	= 0x10,
+    SMMU_CMD_CFGI_ALL        = 0x9, /* alias to STE_RANGE with 0 */
+    SMMU_CMD_TLBI_NH_ALL     = 0x10,
     SMMU_CMD_TLBI_NH_ASID,
     SMMU_CMD_TLBI_NH_VA,
     SMMU_CMD_TLBI_NH_VAA,
-    SMMU_CMD_TLBI_EL3_ALL	 = 0x18,
-    SMMU_CMD_TLBI_EL3_VA	 = 0x1a,
-    SMMU_CMD_TLBI_EL2_ALL	 = 0x20,
+    SMMU_CMD_TLBI_EL3_ALL    = 0x18,
+    SMMU_CMD_TLBI_EL3_VA     = 0x1a,
+    SMMU_CMD_TLBI_EL2_ALL    = 0x20,
     SMMU_CMD_TLBI_EL2_ASID,
     SMMU_CMD_TLBI_EL2_VA,
-    SMMU_CMD_TLBI_EL2_VAA,	/* 0x23 */
-    SMMU_CMD_TLBI_S12_VMALL	 = 0x28,
-    SMMU_CMD_TLBI_S2_IPA	 = 0x2a,
-    SMMU_CMD_TLBI_NSNH_ALL	 = 0x30,
-    SMMU_CMD_ATC_INV	 = 0x40,
+    SMMU_CMD_TLBI_EL2_VAA,  /* 0x23 */
+    SMMU_CMD_TLBI_S12_VMALL  = 0x28,
+    SMMU_CMD_TLBI_S2_IPA     = 0x2a,
+    SMMU_CMD_TLBI_NSNH_ALL   = 0x30,
+    SMMU_CMD_ATC_INV         = 0x40,
     SMMU_CMD_PRI_RESP,
-    SMMU_CMD_RESUME		 = 0x44,
+    SMMU_CMD_RESUME	     = 0x44,
     SMMU_CMD_STALL_TERM,
-    SMMU_CMD_SYNC,		/* 0x46 */
+    SMMU_CMD_SYNC,          /* 0x46 */
 };
 
 /* CMD Consumer (CONS) */
@@ -208,8 +153,8 @@ enum {
 };
 
 /* Command Entry Fields, some are overlapping */
-#define CMD_TYPE_SHIFT     0	/* WORD 0 */
-#define CMD_TYPE_BITS      8
+#define CMD_TYPE_SHIFT    0	/* WORD 0 */
+#define CMD_TYPE_BITS     8
 #define CMD_SEC_SHIFT     9
 #define CMD_SEC_BITS      1
 #define CMD_SEV_SHIFT     10
@@ -250,7 +195,7 @@ enum {
     (((val) >> (shift)) & (mask))
 
 #define __CMD_GET_FLD(x, idx, val)                              \
-    (__GET_FLD((x).word[(idx)], __SMMU_MASK(CMD_##val##_BITS),	\
+    (__GET_FLD((x)->word[(idx)], __SMMU_MASK(CMD_##val##_BITS),	\
                CMD_##val##_SHIFT))
 
 #define CMD_SET_TYPE(cmd, type) ((cmd)->word[0] |= (type))
@@ -261,7 +206,7 @@ enum {
 #define CMD_AC(x)    __CMD_GET_FLD((x), 0, AC)
 #define CMD_AB(x)    __CMD_GET_FLD((x), 0, AB)
 #define CMD_SSID(x)  __CMD_GET_FLD((x), 0, SSID)
-#define CMD_SID(x)   ((x).word[1])
+#define CMD_SID(x)   ((x)->word[1])
 #define CMD_VMID(x)  __CMD_GET_FLD((x), 1, VMID)
 #define CMD_ASID(x)  __CMD_GET_FLD((x), 1, ASID)
 #define CMD_STAG(x)  __CMD_GET_FLD((x), 2, STAG)
@@ -271,7 +216,7 @@ enum {
 #define CMD_LEAF(x)  __CMD_GET_FLD((x), 2, LEAF)
 #define CMD_SPAN(x)  __CMD_GET_FLD((x), 2, SPAN)
 #define CMD_ADDR(x) ({                                  \
-            u64 addr = (u64)(x).word[3];                \
+            uint64_t addr = (uint64_t)(x)->word[3];               \
             addr <<= 32;                                \
             addr |=  __CMD_GET_FLD((x), 0x3, ADDR_LO);	\
             addr;                                       \
@@ -332,14 +277,14 @@ enum {
 #define EVT_CLS_BITS	2
 #define EVT_CLS_SHIFT	8
 #define __EVT_GET_FLD(x, off, val)                              \
-    (__GET_FLD((x).word[(off)], __SMMU_MASK(EVT_##val##_BITS),  \
+    (__GET_FLD((x)->word[(off)], __SMMU_MASK(EVT_##val##_BITS),  \
                EVT_##val##_SHIFT))
 
 #define EVT_TYPE(x)      __EVT_GET_FLD((x), 0, EVT)
 #define EVT_ME(x)        __EVT_GET_FLD((x), 0, ME)
 #define EVT_SSV(x)	 __EVT_GET_FLD((x), 0, SSV)
 #define EVT_SSID(x)	 __EVT_GET_FLD((x), 0, SSID)
-#define EVT_SID(x)	 ((x).word[1])
+#define EVT_SID(x)	 ((x)->word[1])
 #define EVT_SPAN(x)	 __EVT_GET_FLD((x), 2, SPAN)
 #define EVT_P(x)	 __EVT_GET_FLD((x), 2, P)
 #define EVT_X(x)	 __EVT_GET_FLD((x), 2, X)
@@ -350,62 +295,31 @@ enum {
 #define EVT_RNW(x)	 __EVT_GET_FLD((x), 3, RNW)
 #define EVT_S2(x)	 __EVT_GET_FLD((x), 3, S2)
 #define EVT_CLS(x)	 __EVT_GET_FLD((x), 3, CLS)
-#define EVT_EFF_IND(x)	 __GET_FLD((x).word[3], __SMMU_MASK(1), 12)
-#define EVT_EFF_RNW(x)	 __GET_FLD((x).word[3], __SMMU_MASK(1), 13)
-#define EVT_INPUT_ADDR(x) ({                    \
-            u64 addr = (u64)(x).word[5] << 32;  \
-            addr |= (x).word[4];                \
-            addr;                               \
+#define EVT_EFF_IND(x)	 __GET_FLD((x)->word[3], __SMMU_MASK(1), 12)
+#define EVT_EFF_RNW(x)	 __GET_FLD((x)->word[3], __SMMU_MASK(1), 13)
+#define EVT_INPUT_ADDR(x) ({                     \
+            uint64_t addr = (uint64_t)(x)->word[5] << 32;  \
+            addr |= (x)->word[4];                \
+            addr;                                \
         })
 #define EVT_ADDR_FETCH1(x) ({                                   \
-            u64 addr = __GET_FLD((x).word[5], 0xffff, 0);	\
+            uint64_t addr = __GET_FLD((x)->word[5], 0xffff, 0);	\
             addr <<= 32;					\
-            addr |= ((x).word[4] & ~(0x1f));                    \
+            addr |= ((x)->word[4] & ~(0x1f));                   \
             addr;						\
         })
 #define EVT_IPA(x) ({                                           \
-            u64 addr = __GET_FLD((x).word[7], 0xffff, 0);	\
+            uint64_t addr = __GET_FLD((x)->word[7], 0xffff, 0);	\
             addr <<= 32;					\
-            addr |= ((x).word[6] & ~(0xfff));                   \
+            addr |= ((x)->word[6] & ~(0xfff));                  \
             addr ;						\
         })
 #define EVT_ADDR_FETCH2(x) ({                                   \
-            u64 addr = __GET_FLD((x).word[7], 0xffff, 0);	\
+            uint64_t addr = __GET_FLD((x)->word[7], 0xffff, 0);	\
             addr <<= 32;					\
-            addr |= ((x).word[6] & ~(0xfff));                   \
+            addr |= ((x)->word[6] & ~(0xfff));                  \
             addr;						\
         })
-
-/*****************************
- * PRI QUEUE ENTRY
- *****************************/
-#define PRI_SSV_SHIFT	31
-#define PRI_L_SHIFT	30
-#define PRI_W_SHIFT	29
-#define PRI_R_SHIFT	28
-#define PRI_X_SHIFT	27
-#define PRI_PRIV_SHIFT  26
-#define PRI_OF_SHIFT	25
-#define PRI_PRG_BITS	8
-#define PRI_GRP_SHIFT	0
-
-#define PRI_SSV(x)	__GET_FLD((x).word[1], 0x1, PRI_SSV_SHIFT)
-#define PRI_L(x)	__GET_FLD((x).word[1], 0x1, PRI_L_SHIFT)
-#define PRI_W(x)	__GET_FLD((x).word[1], 0x1, PRI_W_SHIFT)
-#define PRI_R(x)	__GET_FLD((x).word[1], 0x1, PRI_R_SHIFT)
-#define PRI_X(x)	__GET_FLD((x).word[1], 0x1, PRI_X_SHIFT)
-#define PRI_PRIV(x)	__GET_FLD((x).word[1], 0x1, PRI_PRIV_SHIFT)
-#define PRI_OF(x)	__GET_FLD((x).word[1], 0x1, PRI_OF_SHIFT)
-#define PRI_GRP(x)	__GET_FLD((x).word[2], __SMMU_MASK(PRI_PRG_BITS), \
-				  PRI_GRP_SHIFT)
-#define PRI_SID(x)	((x).word[0])
-#define PRI_SSID(x)	((x).word[1] & 0xfffff) /* 20 bits */
-#define PRI_ADDR(x)	({                                      \
-            u64 addr = (u64)(x).word[3] << 32;                  \
-            addr |= __GET_FLD((x).word[2], 0xfffff000, 12);	\
-            addr;						\
-        })
-
 
 /*****************************
  * DATA STRUCTURES
@@ -437,7 +351,7 @@ enum {
 #define CD_EPD1_SHIFT (CD_EPD0_SHIFT + 16)
 
 #define _CD_GET_FLD(x, off, val)                                \
-    (__GET_FLD((x).word[(off)], __SMMU_MASK(CD_##val##_BITS),	\
+    (__GET_FLD((x)->word[(off)], __SMMU_MASK(CD_##val##_BITS),	\
                CD_##val##_SHIFT))
 
 #define CD_VALID_BITS	1
@@ -454,15 +368,15 @@ enum {
 #define CD_TTB_LO_SHIFT 4
 #define CD_TTB(x, sel)                                          \
     ({								\
-        u64 addr = _CD_GET_FLD((x), (sel)*2 + 2, TTB_HI);	\
+        uint64_t addr = _CD_GET_FLD((x), (sel)*2 + 2, TTB_HI);	\
         addr <<= 32;						\
-        addr |= (u64)_CD_GET_FLD((x), (sel)*2 + 3, TTB_LO);	\
+        addr |= (uint64_t)_CD_GET_FLD((x), (sel)*2 + 3, TTB_LO);	\
         addr;							\
     })
 #define CD_TTB0(x)	CD_TTB((x), 0)
 #define CD_TTB1(x)	CD_TTB((x), 1)
 
-#define CDM_VALID(x)    ((x).word[0] & 0x1)
+#define CDM_VALID(x)    ((x)->word[0] & 0x1)
 
 /*
  * Bits Required by STE and CD
@@ -481,7 +395,7 @@ enum {
 };
 
 enum {
-    STE_CONFIG_NO        = 0,
+    STE_CONFIG_NONE      = 0,
     STE_CONFIG_S1BY_S2BY = 4, /* S1 Bypass, S2 Bypass */
     STE_CONFIG_S1TR_S2BY,	  /* S1 Translate, S2 Bypass */
     STE_CONFIG_S1BY_S2TR,	  /* S1 Bypass, S2 Translate */
@@ -540,7 +454,7 @@ enum {
 #define STE_S2TTB_HI_SHIFT  0
 
 #define _STE_GET_FLD(x, off, val)                               \
-    (__GET_FLD((x).word[(off)], __SMMU_MASK(STE_##val##_BITS),	\
+    (__GET_FLD((x)->word[(off)], __SMMU_MASK(STE_##val##_BITS),	\
                STE_##val##_SHIFT))
 
 #define STE_VALID(x)     _STE_GET_FLD((x), 0, VALID) /* 0 */
@@ -559,16 +473,16 @@ enum {
 #define STE_CTXPTR(x)                                           \
     ({								\
         unsigned long addr;					\
-        addr = (u64)_STE_GET_FLD((x), 1, CTXPTR_HI) << 32;	\
-        addr |= (u64)_STE_GET_FLD((x), 0, CTXPTR_LO);		\
+        addr = (uint64_t)_STE_GET_FLD((x), 1, CTXPTR_HI) << 32;	\
+        addr |= (uint64_t)_STE_GET_FLD((x), 0, CTXPTR_LO);		\
         addr;							\
     })
 
 #define STE_S2TTB(x)                                            \
     ({								\
         unsigned long addr;					\
-        addr = (u64)_STE_GET_FLD((x), 7, S2TTB_HI) << 32;	\
-        addr |= (u64)_STE_GET_FLD((x), 6, S2TTB_LO);		\
+        addr = (uint64_t)_STE_GET_FLD((x), 7, S2TTB_HI) << 32;	\
+        addr |= (uint64_t)_STE_GET_FLD((x), 6, S2TTB_LO);		\
         addr;							\
     })
 
@@ -577,15 +491,15 @@ enum {
 #define ARM_SMMU_FEAT_CD_2LVL		(1 << 25)
 
 struct __smmu_data2 {
-    u32 word[2];
+    uint32_t word[2];
 };
 
 struct __smmu_data8 {
-    u32 word[8];
+    uint32_t word[8];
 };
 
 struct __smmu_data4 {
-    u32 word[4];
+    uint32_t word[4];
 };
 
 typedef struct __smmu_data2	stm_t; /* STE Level 1 Descriptor */
@@ -604,5 +518,10 @@ typedef struct __smmu_data4	pri_t; /* PRI entry */
         for (i = 0; i < ARRAY_SIZE((dst)->word); i++)		\
             (dst)->word[i] = le32_to_cpu((src)->word[i]);	\
     } while(0)
+
+
+void dump_cmd(cmd_t *);
+void dump_ste(ste_t *);
+void dump_evt(evt_t *);
 
 #endif
