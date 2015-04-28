@@ -103,6 +103,7 @@ static const MemMapEntry a15memmap[] = {
     [VIRT_FLASH] =              {          0, 0x08000000 },
     [VIRT_CPUPERIPHS] =         { 0x08000000, 0x00020000 },
     /* GIC distributor and CPU interfaces sit inside the CPU peripheral space */
+<<<<<<< e472526681d72a86af7ffd80ed977a8de6513259
     [VIRT_GIC_DIST] =           { 0x08000000, 0x00010000 },
     [VIRT_GIC_CPU] =            { 0x08010000, 0x00010000 },
     [VIRT_GIC_V2M] =            { 0x08020000, 0x00001000 },
@@ -450,7 +451,7 @@ static void create_smmu(const VirtBoardInfo *vbi, qemu_irq *pic)
     hwaddr base = vbi->memmap[VIRT_SMMU].base;
     hwaddr size = vbi->memmap[VIRT_SMMU].size;
     int irq = vbi->irqmap[VIRT_RTC];
-    const char compat[] = "brcm,smmuv3\0arm,primecell";
+    const char compat[] = "arm,smmu-v3";
 
     sysbus_create_simple("smmuv3", base, pic[irq]);
 
