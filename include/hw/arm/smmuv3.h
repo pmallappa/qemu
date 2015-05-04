@@ -103,7 +103,6 @@ enum {
     SMMU_CMD_CFGI_STE_RANGE,
     SMMU_CMD_CFGI_CD,
     SMMU_CMD_CFGI_CD_ALL,
-    SMMU_CMD_CFGI_ALL        = 0x9, /* alias to STE_RANGE with 0 */
     SMMU_CMD_TLBI_NH_ALL     = 0x10,
     SMMU_CMD_TLBI_NH_ASID,
     SMMU_CMD_TLBI_NH_VA,
@@ -382,19 +381,6 @@ enum {
  * Bits Required by STE and CD
  */
 enum {
-    STE_CACHE_NONE,
-    STE_CACHE_WB_RA,	/* Write-back, readallocate */
-    STE_CACHE_WT,		/* Write-through */
-    STE_CACHE_WB_NRA,	/* Write-back, NO-readallocate */
-};
-
-enum {
-    STE_SHARE_NONE,
-    STE_SHARE_OUTER = 1,	/* Outer shareable */
-    STE_SHARE_INNER,	/* Inner shareable */
-};
-
-enum {
     STE_CONFIG_NONE      = 0,
     STE_CONFIG_S1BY_S2BY = 4, /* S1 Bypass, S2 Bypass */
     STE_CONFIG_S1TR_S2BY,	  /* S1 Translate, S2 Bypass */
@@ -409,10 +395,11 @@ enum {                          /* S1ContextPtr points to 1 / 2 or more */
     STE_S1FMT_RESERVED,
 };
 
+/* Translation Request without a Substream ID */
 enum {
-    STE_S1DSS_TERMINATE = 0, // Translation Request without a
-    STE_S1DSS_BYPASS,	 // Substream ID, should bebypassed,
-    STE_S1DSS_TRANSLATE,	 // terminated or tranlated
+    STE_S1DSS_TERMINATE = 0,
+    STE_S1DSS_BYPASS,
+    STE_S1DSS_TRANSLATE,
     STE_S1DSS_RESERVED,
 };
 
@@ -510,15 +497,6 @@ typedef struct __smmu_data8	cd_t;  /* Context Descriptor(CD) */
 typedef struct __smmu_data4	cmd_t; /* Command Entry */
 typedef struct __smmu_data8	evt_t; /* Event Entry */
 typedef struct __smmu_data4	pri_t; /* PRI entry */
-
-#define copy_data(type, dst, src)                               \
-    do {                                                        \
-        int i;							\
-        typecheck(type, *dst); typecheck(type, *src);		\
-        for (i = 0; i < ARRAY_SIZE((dst)->word); i++)		\
-            (dst)->word[i] = le32_to_cpu((src)->word[i]);	\
-    } while(0)
-
 
 void dump_cmd(cmd_t *);
 void dump_ste(ste_t *);

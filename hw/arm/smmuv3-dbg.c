@@ -105,6 +105,14 @@
 
 void dump_ste(ste_t *ste)
 {
+    int i;
+
+    for (i = 0; i < ARRAY_SIZE(ste->word); i++) {
+        pr_crit("STE[%2d]: %#010x\t STE[%2d]: %#010x\n",
+                i, ste->word[i], i+1, ste->word[i+1]);
+        i++;
+    }
+
     pr_crit("***************STE**************\n"
             "s1_ctx:%lx s1_fmt:%ld config:%ld valid:%ld\n"
             "strw:%ld eats:%ld s1_stalld:%ld mev:%ld ppar:%ld cont:%ld"
@@ -135,7 +143,7 @@ static const char *__cmd_str_arr[] = {
     [ SMMU_CMD_PREFETCH_CONFIG ] = "CMD_PREFETCH_CONFIG",
     [ SMMU_CMD_PREFETCH_ADDR ]   = "CMD_PREFETCH_ADDR",
     [ SMMU_CMD_CFGI_STE ]        = "CMD_CFGI_STE",
-    [ SMMU_CMD_CFGI_ALL ]        = "CMD_CFGI_ALL",
+    //   [ SMMU_CMD_CFGI_ALL ]        = "CMD_CFGI_ALL",
     [ SMMU_CMD_CFGI_STE_RANGE ]  = "CMD_CFGI_STE_RANGE",
     [ SMMU_CMD_CFGI_CD ]         = "CMD_CFGI_CD",
     [ SMMU_CMD_CFGI_CD_ALL ]     = "CMD_CFGI_CD_ALL",
@@ -159,8 +167,40 @@ static const char *__cmd_str_arr[] = {
     [ SMMU_CMD_SYNC ]            = "CMD_SYNC",
 };
 
+
+static const char *__evt_str_arr[] = {
+    [SMMU_EVT_F_UUT]             = "SMMU_EVT_F_UUT",
+    [SMMU_EVT_C_BAD_SID]         = "SMMU_EVT_C_BAD_SID",
+    [SMMU_EVT_F_STE_FETCH]       = "SMMU_EVT_F_STE_FETCH",
+    [SMMU_EVT_C_BAD_STE]         = "SMMU_EVT_C_BAD_STE",
+    [SMMU_EVT_F_BAD_ATS_REQ]     = "SMMU_EVT_F_BAD_ATS_REQ",
+    [SMMU_EVT_F_STREAM_DISABLED] = "SMMU_EVT_F_STREAM_DISABLED",
+    [SMMU_EVT_F_TRANS_FORBIDDEN] = "SMMU_EVT_F_TRANS_FORBIDDEN",
+    [SMMU_EVT_C_BAD_SSID]        = "SMMU_EVT_C_BAD_SSID",
+    [SMMU_EVT_F_CD_FETCH]        = "SMMU_EVT_F_CD_FETCH",
+    [SMMU_EVT_C_BAD_CD]          = "SMMU_EVT_C_BAD_CD",
+    [SMMU_EVT_F_WALK_EXT_ABRT]   = "SMMU_EVT_F_WALK_EXT_ABRT",
+    [SMMU_EVT_F_TRANS]           = "SMMU_EVT_F_TRANS",
+    [SMMU_EVT_F_ADDR_SZ]         = "SMMU_EVT_F_ADDR_SZ",
+    [SMMU_EVT_F_ACCESS]          = "SMMU_EVT_F_ACCESS",
+    [SMMU_EVT_F_PERM]            = "SMMU_EVT_F_PERM",
+    [SMMU_EVT_F_TLB_CONFLICT]    = "SMMU_EVT_F_TLB_CONFLICT",
+    [SMMU_EVT_F_CFG_CONFLICT]    = "SMMU_EVT_F_CFG_CONFLICT",
+    [SMMU_EVT_E_PAGE_REQ]        = "SMMU_EVT_E_PAGE_REQ",
+};
+
 void dump_evt(evt_t *evt)
 {
+    int i;
+
+    pr_crit(" %s\n", __evt_str_arr[EVT_TYPE(evt)]);
+
+    for (i = 0; i < ARRAY_SIZE(evt->word); i++) {
+        pr_crit("EVT[%2d]: %#010x\t EVT[%2d]: %#010x\n",
+                i, evt->word[i], i+1, evt->word[i+1]);
+        i++;
+    }
+
     pr_crit("**************EVENT****************\n"
             "ssid:%ld ssv:%ld me:%ld event:%ld\n"
             "r:%ld w:%ld x:%ld p:%ld span:%ld\n"
@@ -224,7 +264,7 @@ static int __smmu_build_cmd_fields(uint8_t cmd, struct cmd_flags *f)
     case SMMU_CMD_PREFETCH_CONFIG: f->ssid = f->sec = f->sev = f->sid = 1; break;
     case SMMU_CMD_CFGI_CD: f->ssid = 1; /* fallthrough */
     case SMMU_CMD_CFGI_CD_ALL: f->sec = f->sid = 1; break;
-    case SMMU_CMD_CFGI_ALL:	/* fallthrough */
+        //case SMMU_CMD_CFGI_ALL:	/* fallthrough */
     case SMMU_CMD_CFGI_STE_RANGE: f->sec = f->sid = f->span = 1; break;
     case SMMU_CMD_CFGI_STE: f->sec = f->sid = 1; break;
     case SMMU_CMD_ATC_INV:	f->size = 1; /* fallthrough */
@@ -251,9 +291,9 @@ void dump_cmd(cmd_t *cmde)
     uint8_t cmd = CMD_TYPE(cmde);
     int i;
 
-    pr_crit("cmd:%s \n", __cmd_str_arr[cmd]);
-    for (i = 0; i < sizeof(cmde->word); i++) {
-        pr_crit("CMD[%2d]: %8X\t CMD[%2d]: %8X\n",
+    pr_crit(" %s \n", __cmd_str_arr[cmd]);
+    for (i = 0; i < ARRAY_SIZE(cmde->word); i++) {
+        pr_crit("CMD[%2d]: %#010x\t CMD[%2d]: %#010x\n",
                 i, cmde->word[i], i+1, cmde->word[i+1]);
         i++;
     }

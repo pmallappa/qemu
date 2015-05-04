@@ -33,6 +33,12 @@
 
 #include "hw/arm/smmuv3.h"
 
+/*  Details:
+ *          - No PRI, due to no PCI PRI support
+ *          - 44 Bit VA-IPA-OA support
+ *          - Under Heavy development
+ */
+
 #define SMMU_NREGS       0x200
 
 #define ARM_SMMU_DEBUG
@@ -46,7 +52,7 @@ static unsigned char dbg_bits = DBG_BIT(PANIC) | DBG_BIT(CRIT) | DBG_BIT(DEBUG);
 
 #define SMMU_DPRINTF(lvl, fmt, ...)     do {            \
         if (dbg_bits & DBG_BIT(lvl))                    \
-            fprintf(stderr, "(smmu)%s: " fmt "\n",      \
+            fprintf(stderr, "(smmu)%s: " fmt ,          \
                     __func__, ## __VA_ARGS__);          \
     } while (0)
 
@@ -81,6 +87,14 @@ typedef struct SMMUState {
     bool             in_line;
 
     struct SMMUQueue cmdq, evtq;
+
+#define SMMU_FEATURE_2LVL_STE   (1<<0)
+    struct {
+        uint32_t features;
+        uint16_t sid_size;
+        uint16_t sid_split;
+        uint64_t strtab_base;
+    };
 
     MemoryRegion     iomem;
 
@@ -146,30 +160,87 @@ static uint16_t smmu_find_sid(DeviceState *dev)
     return pci_get_arid(pcidev);
 }
 
-static cd_t *smmu_get_cd(SMMUState *s, ste_t *ste, uint32_t ssid)
+static int smmu_walk_pgtable(SMMUState *s, ste_t *ste, cd_t *cd,
+                             IOMMUTLBEntry *tlbe)
 {
-    return NULL;
-}
+    uint64_t ttbr = 0;
+    int retval = 0;
 
-static ste_t * smmu_find_ste(SMMUState *s, uint16_t sid)
-{
-    ste_t *ste = NULL;
-#if 0
-    if (ste_lvl2(s)) {
+    switch(STE_CONFIG(ste)) {
+    case STE_CONFIG_S1BY_S2BY:  /* No Change */
+        return 0;
+    case STE_CONFIG_S1TR_S2BY:
+        ttbr = CD_TTB0(cd);
+        ttbr = CD_TTB1(cd);
+        break;
+    default:
+        ttbr = STE_S2TTB(ste);
+        SMMU_DPRINTF(DEBUG, "Other PageTable Walks not supported\n");
+        break;
+    }
 
-    } else {
+    if (ttbr) {
 
     }
-#endif
-    return ste;
+
+    return retval;
+}
+
+static cd_t *smmu_get_cd(SMMUState *s, ste_t *ste, uint32_t ssid)
+{
+    cd_t *cd = NULL;
+
+    if (STE_S1CDMAX(ste) != 0) {
+        SMMU_DPRINTF(CRIT, "Multilevel Ctx Descriptor not supported yet\n");
+    } else
+        cd = (cd_t *)STE_CTXPTR(ste);
+
+    return cd;
+}
+
+#define STM2U64(stm) ({                                 \
+            uint64_t hi, lo;                            \
+            hi = (stm)->word[1];                        \
+            lo = (stm)->word[0] & ~(uint64_t)0x1f;      \
+            hi << 32 | lo;                              \
+        })
+
+#define STMSPAN(stm) (stm)->word[0] & 0x1f;
+
+static int smmu_find_ste(SMMUState *s, uint16_t sid, ste_t *ste)
+{
+    int l1_ste_offset = sid, l2_ste_offset;
+    hwaddr addr;
+
+    if (s->features & SMMU_FEATURE_2LVL_STE) {
+        int span;
+
+        l1_ste_offset = sid >> (s->sid_size - s->sid_split);
+        l2_ste_offset = sid & ~(1 << s->sid_split);
+
+        stm_t *stm = (stm_t *)(s->strtab_base + l1_ste_offset * sizeof(stm_t));
+
+        span = STMSPAN(stm);
+        if (l2_ste_offset > span)
+            return SMMU_EVT_C_BAD_STE;
+
+        addr = STM2U64(stm) + l2_ste_offset * sizeof(ste_t);
+    } else
+        addr = s->strtab_base + l1_ste_offset * sizeof(ste_t);
+
+    if (smmu_read_sysmem(s, addr, ste, sizeof(ste_t)))
+        return SMMU_EVT_F_UUT;
+
+    return 0;
 }
 
 static IOMMUTLBEntry
 smmu_translate_dev(DeviceState *dev, MemoryRegion *iommu,
                    hwaddr addr, bool is_write)
 {
+    int error = 0;
     uint16_t sid;
-    ste_t *ste;
+    ste_t ste;
     cd_t *cd;
     SMMUState *s = container_of(iommu, SMMUState, iommu);
 
@@ -184,32 +255,47 @@ smmu_translate_dev(DeviceState *dev, MemoryRegion *iommu,
     /* We allow traffic through if SMMU is disabled */
     if (!smmu_enabled(s)) {
         SMMU_DPRINTF(CRIT, "SMMU Not enabled\n");
-        goto fixout;
+        goto bypass;
     }
 
     sid = smmu_find_sid(dev);
     SMMU_DPRINTF(CRIT, "SID:%x\n", sid);
 
-    ste = smmu_find_ste(s, sid);
-    if (!ste || !STE_VALID(ste))
-        goto out;
+    error = smmu_find_ste(s, sid, &ste);
+    if (error | !STE_VALID(&ste)) {
+        error = SMMU_EVT_C_BAD_STE;
+        goto error_out;
+    }
 
-    switch(STE_CONFIG(ste)) {
+    switch(STE_CONFIG(&ste)) {
     case STE_CONFIG_S1BY_S2BY:
-        goto fixout;
+        goto bypass;
     case STE_CONFIG_S1TR_S2BY:
-        cd = smmu_get_cd(s, ste, 0); /* We dont have SSID, so 0 */
+        cd = smmu_get_cd(s, &ste, 0); /* We dont have SSID, so 0 */
         cd = cd;
         break;
+    case STE_CONFIG_S1BY_S2TR:
+    case STE_CONFIG_S1TR_S2TR:
     default:
+        SMMU_DPRINTF(CRIT, "Unsupported STE Configuration\n");
+        goto out;
         break;
     }
 
- fixout:
+    error = smmu_walk_pgtable(s, &ste, cd, &ret);
+
+error_out:
+    if (error) {        /* Post the Error using Event Q */
+        SMMU_DPRINTF(CRIT, "Translation Error: %x\n", error);
+        smmu_create_event(s, MIOMMUTLBEntry, error);
+        goto out;
+    }
+
+bypass:
     /* After All check is done, we do allow Read/Write */
     ret.perm = is_write ? IOMMU_WO: IOMMU_RO;
 
- out:
+out:
     return ret;
 }
 
@@ -273,7 +359,7 @@ static uint64_t smmu_read_mmio(void *opaque, hwaddr addr,
         val = smmu_read64_reg(s, addr); break;
     }
 
-    SMMU_DPRINTF(CRIT, "addr: %lx val:%lx",addr, val);
+    SMMU_DPRINTF(CRIT, "addr: %lx val:%lx\n",addr, val);
     return val;
 }
 
@@ -290,37 +376,61 @@ static int smmu_evtq_update(SMMUState *s)
     return 0;
 }
 
+#define SMMU_CMDQ_ERR(s) (smmu_read32_reg(s, SMMU_REG_GERROR) & \
+                          SMMU_GERROR_CMDQ)
+
 static int smmu_cmdq_consume(SMMUState *s)
 {
     struct SMMUQueue *q = &s->cmdq;
     uint64_t head, tail;
-    uint32_t error = 0;
+    uint32_t error = SMMU_CMD_ERR_NONE;
     bool wrap = false;
 
     head = smmu_read32_reg(s, SMMU_REG_CMDQ_PROD);
     tail = smmu_read32_reg(s, SMMU_REG_CMDQ_CONS);
-
-    //head_wrap = head & (1 << q->prod);
-    //tail_wrap = tail & (1 << q->cons);
 
     head &= ~(1 << q->size);
     tail &= ~(1 << q->size);
 
     SMMU_DPRINTF(DEBUG, "q->size:%d head:%lx, tail:%lx\n", q->size, head, tail);
 
-    while (tail != head) {
+    while (!SMMU_CMDQ_ERR(s) && (tail != head)) {
         cmd_t cmd;
         hwaddr addr = q->base + (sizeof(cmd) * tail);
 
-        if (smmu_read_sysmem(s, addr, &cmd, sizeof(cmd)))
-            return -1;
+        if (smmu_read_sysmem(s, addr, &cmd, sizeof(cmd))) {
+            error = SMMU_CMD_ERR_ABORT;
+            goto out_while;
+        }
 
+        SMMU_DPRINTF(DEBUG, "Reading Command @idx:%lx\n", tail);
         dump_cmd(&cmd);
 
         switch(CMD_TYPE(&cmd)) {
-        default:                /* Check if we are coming here */
-            SMMU_DPRINTF(DEBUG, "Reading Command @idx:%lx\n", tail);
+        case SMMU_CMD_CFGI_STE:
+        case SMMU_CMD_CFGI_STE_RANGE:
             break;
+        case SMMU_CMD_TLBI_NSNH_ALL: /* TLB is not  */
+        case SMMU_CMD_TLBI_EL2_ALL:  /* implemented */
+        case SMMU_CMD_TLBI_EL3_ALL:
+        case SMMU_CMD_TLBI_NH_ALL:
+            break;
+        case SMMU_CMD_SYNC:
+            break;
+        default:
+            {                /* Check if we are coming here */
+                int i;
+                /*    Actually we should interrupt  */
+                SMMU_DPRINTF(CRIT, "Unknown Command type: %lx, ignoring\n",
+                             CMD_TYPE(&cmd));
+                for (i = 0; i < ARRAY_SIZE(cmd.word); i++) {
+                    SMMU_DPRINTF(CRIT, "CMD[%2d]: %#010x\t CMD[%2d]: %#010x\n",
+                                 i, cmd.word[i], i+1, cmd.word[i+1]);
+                    i++;
+                }
+            }
+            error = SMMU_CMD_ERR_ILLEGAL;
+            goto out_while;
         }
 
         tail++;
@@ -331,8 +441,14 @@ static int smmu_cmdq_consume(SMMUState *s)
         }
     }
 
-    if (error)
+out_while:
+
+    if (error) {
+        uint32_t gerror = smmu_read32_reg(s, SMMU_REG_GERROR);
+        gerror |= SMMU_GERROR_CMDQ;
+        smmu_write32_reg(s, SMMU_REG_CMDQ_CONS, tail);
         tail |= error << 24;
+    }
 
     if (wrap)
         tail |= 1 << (q->size + 1);
@@ -358,7 +474,10 @@ static void smmu_update(SMMUState *s)
     }
 
     if (smmu_cmd_q_enabled(s) && smmu_cmdq_consume(s)) {
-        /* Result in Error if not returned with 0 */
+        /* If Command can't be consumed, should be reported as an
+         * Event on EVENT queue
+         */
+        //smmu_report_event(s, );
     }
 }
 
@@ -370,7 +489,7 @@ static void smmu_write_mmio(void *opaque, hwaddr addr,
     bool check_queue = false;
     uint32_t val32 = (uint32_t)val;
 
-    SMMU_DPRINTF(DEBUG, "reg:%lx cur: %lx new: %lx", addr,
+    SMMU_DPRINTF(DEBUG, "reg:%lx cur: %lx new: %lx\n", addr,
                  smmu_read_mmio(opaque, addr, size), val);
 
     switch (addr) {
@@ -379,21 +498,32 @@ static void smmu_write_mmio(void *opaque, hwaddr addr,
         smmu_write32_reg(s, addr, val32);
         smmu_write32_reg(s, addr + 4, val32);
         return;
-    case SMMU_REG_STATUSR:
+    case SMMU_REG_GERRORN:
+        if (smmu_read32_reg(s, SMMU_REG_GERROR) == val32)
+            qemu_irq_lower(s->irq);
+
+        smmu_write32_reg(s, SMMU_REG_GERROR, val32);
         break;
     case SMMU_REG_CMDQ_BASE ... SMMU_REG_CMDQ_CONS:
         q = &s->cmdq; break;
     case SMMU_REG_EVTQ_BASE ... SMMU_REG_EVTQ_IRQ_CFG1:
         q = &s->evtq; break;
-    case SMMU_REG_STRTAB_BASE ... SMMU_REG_STRTAB_BASE_CFG:
+    case SMMU_REG_STRTAB_BASE:
+        break;
+    case SMMU_REG_STRTAB_BASE_CFG:
+        if (((val32 >> 16) & 0x3) == 0x1) {
+            s->sid_split = (val32 >> 6) & 0x1f;
+            s->features |= SMMU_FEATURE_2LVL_STE;
+        }
         break;
     case SMMU_REG_PRIQ_BASE ... SMMU_REG_PRIQ_IRQ_CFG1:
         SMMU_DPRINTF(CRIT, "Trying to write to PRIQ, not implemented\n");
         break;
     default:
+    case SMMU_REG_STATUSR:
     case 0xFDC ... 0xFFC:
     case SMMU_REG_IDR0 ... SMMU_REG_IDR5:
-        SMMU_DPRINTF(CRIT, "Trying to write to read-only register %lx", addr);
+        SMMU_DPRINTF(CRIT, "Trying to write to read-only register %lx\n", addr);
         return;
     }
 
@@ -433,6 +563,7 @@ static void smmu_write_mmio(void *opaque, hwaddr addr,
         if (smmu_cmd_q_enabled(s) && smmu_cmdq_consume(s)) {
             /* Result in Error if not returned with 0 */
         }
+
         smmu_update(s);
     }
 }
