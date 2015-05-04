@@ -31,6 +31,7 @@
 #include "hw/sysbus.h"
 #include "hw/arm/arm.h"
 #include "hw/arm/primecell.h"
+#include "hw/arm/smmuv3.h"
 #include "hw/devices.h"
 #include "net/net.h"
 #include "sysemu/block-backend.h"
@@ -142,6 +143,16 @@ static const MemMapEntry a15memmap[] = {
      */
     [VIRT_PCIE] =       { 0x10000000, 0x30000000 },
     [VIRT_MEM] =        { 0x40000000, 30ULL * 1024 * 1024 * 1024 },
+};
+
+static const struct smmuirq {
+    const char *name;
+    int irq;
+} smmuirqmap[] = {
+    [SMMU_IRQ_EVTQ]= {"eventq", 74},
+    [SMMU_IRQ_PRIQ]= {"priq", 75},
+    [SMMU_IRQ_CMD_SYNC]= {"cmdq_sync", 77},
+    [SMMU_IRQ_GERROR]= {"gerror", 79},
 };
 
 static const int a15irqmap[] = {
@@ -430,21 +441,31 @@ static void create_uart(const VirtBoardInfo *vbi, qemu_irq *pic)
 static void create_smmu(const VirtBoardInfo *vbi, qemu_irq *pic)
 {
     char *nodename;
+    int i;
     hwaddr base = vbi->memmap[VIRT_SMMU].base;
     hwaddr size = vbi->memmap[VIRT_SMMU].size;
-    int irq = vbi->irqmap[VIRT_RTC];
     const char compat[] = "arm,smmu-v3";
 
-    sysbus_create_simple("smmuv3", base, pic[irq]);
+    sysbus_create_varargs("smmuv3", base,
+                          pic[smmuirqmap[0].irq],
+                          pic[smmuirqmap[1].irq],
+                          pic[smmuirqmap[2].irq],
+                          pic[smmuirqmap[3].irq], NULL);
 
     nodename = g_strdup_printf("/smmuv3@%" PRIx64, base);
     qemu_fdt_add_subnode(vbi->fdt, nodename);
     qemu_fdt_setprop(vbi->fdt, nodename, "compatible", compat, sizeof(compat));
     qemu_fdt_setprop_sized_cells(vbi->fdt, nodename, "reg",
                                  2, base, 2, size);
-    qemu_fdt_setprop_cells(vbi->fdt, nodename, "interrupts",
-                           GIC_FDT_IRQ_TYPE_SPI, irq,
-                           GIC_FDT_IRQ_FLAGS_LEVEL_HI);
+
+    for (i = 0; i < ARRAY_SIZE(smmuirqmap); i++) {
+        qemu_fdt_setprop_cells(vbi->fdt, nodename, "interrupts",
+                               GIC_FDT_IRQ_TYPE_SPI, smmuirqmap[i].irq,
+                               GIC_FDT_IRQ_FLAGS_LEVEL_HI);
+
+        qemu_fdt_setprop(vbi->fdt, nodename, "interrupt-names",
+                         smmuirqmap[i].name, strlen(smmuirqmap[i].name));
+    }
     qemu_fdt_setprop_cell(vbi->fdt, nodename, "clocks", vbi->clock_phandle);
     qemu_fdt_setprop_string(vbi->fdt, nodename, "clock-names", "apb_pclk");
     g_free(nodename);
