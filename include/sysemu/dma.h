@@ -84,11 +84,12 @@ static inline bool dma_memory_valid(AddressSpace *as,
                                       dir == DMA_DIRECTION_FROM_DEVICE);
 }
 
-static inline int dma_memory_rw_relaxed_dev(DeviceState *dev, AddressSpace *as,
+/* @dev: Requesting Device */
+static inline int dma_memory_rw_relaxed_dev(AddressSpace *as, DeviceState *dev,
 					 dma_addr_t addr, void *buf, dma_addr_t len,
                                         DMADirection dir)
 {
-    return address_space_rw_dev(dev, as, addr, buf, len, dir == DMA_DIRECTION_FROM_DEVICE);
+    return address_space_rw_dev(as, dev, addr, buf, len, dir == DMA_DIRECTION_FROM_DEVICE);
 }
 
 static inline int dma_memory_rw_relaxed(AddressSpace *as, dma_addr_t addr,
@@ -111,12 +112,13 @@ static inline int dma_memory_write_relaxed(AddressSpace *as, dma_addr_t addr,
                                  DMA_DIRECTION_FROM_DEVICE);
 }
 
-static inline int dma_memory_rw_dev(DeviceState *dev, AddressSpace *as,
+/* @dev: Requesting Device */
+static inline int dma_memory_rw_dev(AddressSpace *as, DeviceState *dev,
 				dma_addr_t addr, void *buf, dma_addr_t len,
 				DMADirection dir)
 {
 	dma_barrier(as, dir);
-	return dma_memory_rw_relaxed_dev(dev, as, addr, buf, len, dir);
+	return dma_memory_rw_relaxed_dev(as, dev, addr, buf, len, dir);
 }
 
 static inline int dma_memory_rw(AddressSpace *as, dma_addr_t addr,
