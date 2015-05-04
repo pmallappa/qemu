@@ -80,7 +80,7 @@ typedef struct SMMUState {
     uint32_t         cid[4];    /* Coresight registers */
     uint32_t         pid[8];    /* ---"---- */
 
-    qemu_irq         irq;
+    qemu_irq         irq[4];
     uint32_t         version;
 
     bool             virtual;
@@ -198,6 +198,14 @@ static cd_t *smmu_get_cd(SMMUState *s, ste_t *ste, uint32_t ssid)
     return cd;
 }
 
+static int smmu_read_sysmem(SMMUState *s, hwaddr addr,
+                            void *buf, dma_addr_t len)
+{
+    return address_space_rw(&s->iommu_as, addr, buf,
+                            len, false);
+
+}
+
 #define STM2U64(stm) ({                                 \
             uint64_t hi, lo;                            \
             hi = (stm)->word[1];                        \
@@ -234,8 +242,22 @@ static int smmu_find_ste(SMMUState *s, uint16_t sid, ste_t *ste)
     return 0;
 }
 
+static void smmu_create_event(SMMUState *s, IOMMUTLBEntry *iotlb, int error)
+{
+    switch (error) {
+    case SMMU_EVT_C_BAD_STE:
+        break;
+    case SMMU_EVT_F_UUT:
+        break;
+    default:
+        break;
+    }
+    /* This should actually raise an EVENT IRQ */
+    qemu_irq_raise(s->irq[SMMU_IRQ_EVTQ]);
+}
+
 static IOMMUTLBEntry
-smmu_translate_dev(DeviceState *dev, MemoryRegion *iommu,
+smmu_translate_dev(MemoryRegion *iommu, DeviceState *dev,
                    hwaddr addr, bool is_write)
 {
     int error = 0;
@@ -287,7 +309,7 @@ smmu_translate_dev(DeviceState *dev, MemoryRegion *iommu,
 error_out:
     if (error) {        /* Post the Error using Event Q */
         SMMU_DPRINTF(CRIT, "Translation Error: %x\n", error);
-        smmu_create_event(s, MIOMMUTLBEntry, error);
+        smmu_create_event(s, &ret, error);
         goto out;
     }
 
@@ -361,14 +383,6 @@ static uint64_t smmu_read_mmio(void *opaque, hwaddr addr,
 
     SMMU_DPRINTF(CRIT, "addr: %lx val:%lx\n",addr, val);
     return val;
-}
-
-static int smmu_read_sysmem(SMMUState *s, hwaddr addr,
-                            void *buf, dma_addr_t len)
-{
-    return address_space_rw(&s->iommu_as, addr, buf,
-                            len, false);
-
 }
 
 static int smmu_evtq_update(SMMUState *s)
@@ -488,19 +502,22 @@ static void smmu_write_mmio(void *opaque, hwaddr addr,
     struct SMMUQueue *q = NULL;
     bool check_queue = false;
     uint32_t val32 = (uint32_t)val;
+    int i;
 
     SMMU_DPRINTF(DEBUG, "reg:%lx cur: %lx new: %lx\n", addr,
                  smmu_read_mmio(opaque, addr, size), val);
 
     switch (addr) {
     case SMMU_REG_IRQ_CTRL:     /* Update the ACK as well */
+        for (i = 0; i < 4; i++)
+            if (!(val & (1 << i))) qemu_irq_lower(s->irq[i]);
     case SMMU_REG_CR0:
         smmu_write32_reg(s, addr, val32);
         smmu_write32_reg(s, addr + 4, val32);
         return;
     case SMMU_REG_GERRORN:
         if (smmu_read32_reg(s, SMMU_REG_GERROR) == val32)
-            qemu_irq_lower(s->irq);
+            qemu_irq_lower(s->irq[SMMU_IRQ_GERROR]);
 
         smmu_write32_reg(s, SMMU_REG_GERROR, val32);
         break;
@@ -648,7 +665,7 @@ static int smmu_init(SysBusDevice *dev)
     SMMUSysState *sys = SMMU_SYS_DEV(dev);
     SMMUState *s = &sys->smmu_state;
     PCIBus *pcibus = pci_find_primary_bus();
-
+    int i;
     HERE();
     /* Register Access */
     memory_region_init_io(&s->iomem, OBJECT(sys), &smmu_mem_ops,
@@ -659,7 +676,8 @@ static int smmu_init(SysBusDevice *dev)
 
     sysbus_init_mmio(dev, &s->iomem);
 
-    sysbus_init_irq(dev, &s->irq);
+    for (i = 0; i < ARRAY_SIZE(s->irq); i++)
+        sysbus_init_irq(dev, &s->irq[i]);
 
     /* Host Memory Access */
     memory_region_init_iommu(&s->iommu, OBJECT(sys), &smmu_ops,

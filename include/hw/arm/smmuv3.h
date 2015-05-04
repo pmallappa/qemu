@@ -24,6 +24,13 @@
 #include "hw/qdev.h"
 #include "sysemu/dma.h"
 
+enum {
+    SMMU_IRQ_GERROR,
+    SMMU_IRQ_PRIQ,
+    SMMU_IRQ_EVTQ,
+    SMMU_IRQ_CMD_SYNC,
+};
+
 #define GENMASK(h, l)                                           \
     (((~0UL) << (l)) & (~0UL >> (BITS_PER_LONG - 1 - (h))))
 
