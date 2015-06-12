@@ -41,6 +41,8 @@ struct PlatformBusDevice {
     bool done_gathering;
 
     /*< public >*/
+    hwaddr base_address;
+
     uint32_t mmio_size;
     MemoryRegion mmio;
 

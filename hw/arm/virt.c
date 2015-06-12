@@ -735,6 +735,7 @@ static void create_platform_bus(VirtBoardInfo *vbi, qemu_irq *pic)
 {
     DeviceState *dev;
     SysBusDevice *s;
+    PlatformBusDevice *pbus;
     int i;
     ARMPlatformBusFDTParams *fdt_params = g_new(ARMPlatformBusFDTParams, 1);
     MemoryRegion *sysmem = get_system_memory();
@@ -761,6 +762,9 @@ static void create_platform_bus(VirtBoardInfo *vbi, qemu_irq *pic)
         platform_bus_params.platform_bus_size);
     qdev_init_nofail(dev);
     s = SYS_BUS_DEVICE(dev);
+    pbus = PLATFORM_BUS_DEVICE(dev);
+
+    pbus->base_address = vbi->memmap[VIRT_PLATFORM_BUS].base;
 
     for (i = 0; i < platform_bus_params.platform_bus_num_irqs; i++) {
         int irqn = platform_bus_params.platform_bus_first_irq + i;
