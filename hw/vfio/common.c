@@ -676,8 +676,12 @@ static int vfio_connect_container(VFIOGroup *group, AddressSpace *as)
             goto free_container_exit;
         }
 
-        ret = ioctl(fd, VFIO_SET_IOMMU,
-                    v2 ? VFIO_TYPE1v2_IOMMU : VFIO_TYPE1_IOMMU);
+        if (ioctl(fd, VFIO_CHECK_EXTENSION, VFIO_TYPE1_NESTING_IOMMU)) {
+            ret = ioctl(fd, VFIO_SET_IOMMU, VFIO_TYPE1_NESTING_IOMMU);
+        } else {
+            ret = ioctl(fd, VFIO_SET_IOMMU,
+			    v2 ? VFIO_TYPE1v2_IOMMU : VFIO_TYPE1_IOMMU);
+        }
         if (ret) {
             error_report("vfio: failed to set iommu for container: %m");
             ret = -errno;

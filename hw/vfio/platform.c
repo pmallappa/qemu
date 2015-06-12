@@ -475,6 +475,7 @@ static int vfio_base_device_init(VFIODevice *vbasedev)
         error_report("vfio: failed to get group %d", groupid);
         return -ENOENT;
     }
+    vbasedev->group = group;
 
     g_snprintf(path, sizeof(path), "%s", vbasedev->name);
 
