@@ -23,6 +23,18 @@
 #include "exec/address-spaces.h"
 #include "sysemu/sysemu.h"
 
+static NotifierList platform_bus_link_done_notifiers =
+    NOTIFIER_LIST_INITIALIZER(platform_bus_link_done_notifiers);
+
+void qemu_add_platform_bus_link_done_notifier(Notifier *notify)
+{
+    notifier_list_add(&platform_bus_link_done_notifiers, notify);
+}
+
+static void qemu_run_platform_bus_link_done_notifiers(void)
+{
+    notifier_list_notify(&platform_bus_link_done_notifiers, NULL);
+}
 
 /*
  * Returns the PlatformBus IRQ number for a SysBusDevice irq number or -1 if
@@ -195,6 +207,7 @@ static void platform_bus_init_notify(Notifier *notifier, void *data)
     plaform_bus_refresh_irqs(pb);
 
     foreach_dynamic_sysbus_device(link_sysbus_device, pb);
+    qemu_run_platform_bus_link_done_notifiers();
 }
 
 static void platform_bus_realize(DeviceState *dev, Error **errp)

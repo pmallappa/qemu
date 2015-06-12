@@ -53,5 +53,6 @@ int platform_bus_get_irqn(PlatformBusDevice *platform_bus, SysBusDevice *sbdev,
                           int n);
 hwaddr platform_bus_get_mmio_addr(PlatformBusDevice *pbus, SysBusDevice *sbdev,
                                   int n);
+void qemu_add_platform_bus_link_done_notifier(Notifier *notify);
 
 #endif /* !HW_PLATFORM_BUS_H */
