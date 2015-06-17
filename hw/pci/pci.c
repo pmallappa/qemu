@@ -1212,6 +1212,8 @@ static void pci_irq_handler(void *opaque, int irq_num, int level)
 
 static inline int pci_intx(PCIDevice *pci_dev)
 {
+    printf("Here in PCI intex, returning %d\n", pci_get_byte(pci_dev->config + 
+			PCI_INTERRUPT_PIN) - 1);
     return pci_get_byte(pci_dev->config + PCI_INTERRUPT_PIN) - 1;
 }
 

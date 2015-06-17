@@ -68,12 +68,19 @@ static unsigned char dbg_bits = DBG_BIT(PANIC) | DBG_BIT(CRIT) | DBG_BIT(DEBUG);
 #define SMMU_PCI_DEV(obj) OBJECT_CHECK(SMMUPciState, (obj), TYPE_SMMU_DEV)
 
 struct SMMUQueue {
-    hwaddr    base;
-    uint32_t  size;
+    hwaddr   base;
 
-    uint16_t  prod;
-    uint16_t  cons;
+    uint32_t prod;
+    uint32_t cons;
+
+    uint16_t entries;           /* Number of entries */
+    uint8_t  ent_size;          /* Size of entry in bytes */
+    uint8_t  shift;             /* Size in log2 */
 };
+
+#define Q_ENTRY(q, idx) (q->base + q->ent_size * idx)
+#define Q_WRAP(q, pc) ((pc) >> (q)->shift)
+#define Q_IDX(q, pc) ((pc) & __SMMU_MASK((q)->entries))
 
 typedef struct SMMUState {
     uint8_t          regs[SMMU_NREGS * sizeof(uint32_t)];
@@ -119,19 +126,34 @@ static inline int smmu_enabled(SMMUState *s)
     return s->regs[SMMU_REG_CR0] & SMMU_CR0_SMMU_ENABLE;
 }
 
+static inline int smmu_irq_enabled(SMMUState *s, uint32_t q)
+{
+    return s->regs[SMMU_REG_IRQ_CTRL] & q;
+}
+#define smmu_evt_irq_enabled(s) smmu_irq_enabled(s, SMMU_IRQ_CTRL_EVENT_EN)
+
 static inline int smmu_q_enabled(SMMUState *s, uint32_t q)
 {
     return s->regs[SMMU_REG_CR0] & q;
 }
 
+static inline int smmu_q_full(struct SMMUQueue *q)
+{
+    return (q->cons == q->prod) && (Q_WRAP(q, q->cons) != Q_WRAP(q, q->prod));
+}
+
 #define smmu_cmd_q_enabled(s) smmu_q_enabled(s, SMMU_CR0_CMDQ_ENABLE)
 #define smmu_evt_q_enabled(s) smmu_q_enabled(s, SMMU_CR0_EVTQ_ENABLE)
 
+#define smmu_evt_q_full(s) smmu_q_full(&s->evtq)
+#define smmu_cmd_q_full(s) smmu_q_full(&s->cmdq)
+
+#define smmu_gerror(s) (smmu_read32_reg(s, SMMU_REG_GERROR) ==  \
+                        smmu_read32_reg(s, SMMU_REG_GERRORN))
+
 static uint32_t smmu_read32_reg(SMMUState *s, uint32_t reg)
 {
-    uint64_t *ptr;
-    ptr = (uint64_t *)&s->regs[reg];
-    return *ptr;
+    return *(uint64_t *)&s->regs[reg];
 }
 
 static void smmu_write32_reg(SMMUState *s, uint32_t reg, uint32_t val)
@@ -143,10 +165,9 @@ static void smmu_write32_reg(SMMUState *s, uint32_t reg, uint32_t val)
 
 static uint64_t smmu_read64_reg(SMMUState *s, uint64_t reg)
 {
-    uint64_t *ptr;
-    ptr = (uint64_t *)&s->regs[reg];
-    return *ptr;
+    return *(uint64_t *)&s->regs[reg];
 }
+
 static void smmu_write64_reg(SMMUState *s, uint64_t reg, uint64_t val)
 {
     uint64_t *ptr;
@@ -201,8 +222,16 @@ static cd_t *smmu_get_cd(SMMUState *s, ste_t *ste, uint32_t ssid)
 static int smmu_read_sysmem(SMMUState *s, hwaddr addr,
                             void *buf, dma_addr_t len)
 {
-    return address_space_rw(&s->iommu_as, addr, buf,
-                            len, false);
+    return address_space_rw(&address_space_memory,
+                            addr, buf, len, false);
+
+}
+
+static int smmu_write_sysmem(SMMUState *s, hwaddr addr,
+                            void *buf, dma_addr_t len)
+{
+    return address_space_rw(&address_space_memory,
+                            addr, buf, len, true);
 
 }
 
@@ -242,18 +271,46 @@ static int smmu_find_ste(SMMUState *s, uint16_t sid, ste_t *ste)
     return 0;
 }
 
-static void smmu_create_event(SMMUState *s, IOMMUTLBEntry *iotlb, int error)
+static void smmu_create_event(SMMUState *s, hwaddr iova,
+                              uint32_t sid, bool is_write, int error)
 {
+    struct SMMUQueue *q = &s->evtq;
+    uint64_t head = Q_IDX(q, q->prod);
+    bool overflow = true;
+    evt_t evt;
+
+    if (!smmu_evt_q_enabled(s))
+        overflow = true; goto set_overflow;
+
+    if (!smmu_evt_q_full(s))
+        overflow = true; goto set_overflow;
+
+    EVT_SET_TYPE(&evt, error);
+    EVT_SET_SID(&evt, sid);
+
     switch (error) {
-    case SMMU_EVT_C_BAD_STE:
-        break;
     case SMMU_EVT_F_UUT:
-        break;
+    case SMMU_EVT_C_BAD_STE:
+    case SMMU_EVT_F_TRANS_FORBIDDEN:
     default:
         break;
     }
-    /* This should actually raise an EVENT IRQ */
-    qemu_irq_raise(s->irq[SMMU_IRQ_EVTQ]);
+
+    EVT_SET_INPUT_ADDR(&evt, iova);
+
+    smmu_write_sysmem(s, Q_ENTRY(q, head), &evt, sizeof(evt));
+
+    head++;
+
+set_overflow:
+    if (overflow)
+        head ^= 1 << 31;
+    else if (smmu_evt_irq_enabled(s))
+        qemu_irq_raise(s->irq[SMMU_IRQ_EVTQ]);
+
+    q->prod = head;
+
+    smmu_write32_reg(s, SMMU_REG_EVTQ_PROD, head);
 }
 
 static IOMMUTLBEntry
@@ -280,7 +337,10 @@ smmu_translate_dev(MemoryRegion *iommu, DeviceState *dev,
         goto bypass;
     }
 
-    sid = smmu_find_sid(dev);
+    if (dev == NULL)
+        sid = 0;
+    else
+        sid = smmu_find_sid(dev);
     SMMU_DPRINTF(CRIT, "SID:%x\n", sid);
 
     error = smmu_find_ste(s, sid, &ste);
@@ -309,7 +369,7 @@ smmu_translate_dev(MemoryRegion *iommu, DeviceState *dev,
 error_out:
     if (error) {        /* Post the Error using Event Q */
         SMMU_DPRINTF(CRIT, "Translation Error: %x\n", error);
-        smmu_create_event(s, &ret, error);
+        smmu_create_event(s, ret.iova, sid, is_write, error);
         goto out;
     }
 
@@ -331,17 +391,8 @@ out:
 static IOMMUTLBEntry
 smmu_translate(MemoryRegion *iommu, hwaddr addr, bool is_write)
 {
-    IOMMUTLBEntry ret = {
-        .target_as = &address_space_memory,
-        .iova = addr,
-        .translated_addr = addr,
-        .addr_mask = TARGET_PAGE_MASK,
-        .perm = IOMMU_NONE,
-    };
-
-    ret.perm = is_write ? IOMMU_WO: IOMMU_RO;
-
-    return ret;
+    SMMU_DPRINTF(INFO, "Dont know");
+    return smmu_translate_dev(iommu, NULL, addr, is_write);
 }
 
 static const MemoryRegionIOMMUOps smmu_ops = {
@@ -387,7 +438,10 @@ static uint64_t smmu_read_mmio(void *opaque, hwaddr addr,
 
 static int smmu_evtq_update(SMMUState *s)
 {
-    return 0;
+    if (!smmu_enabled(s))
+        return 0;
+
+    return 1;
 }
 
 #define SMMU_CMDQ_ERR(s) (smmu_read32_reg(s, SMMU_REG_GERROR) & \
@@ -401,12 +455,11 @@ static int smmu_cmdq_consume(SMMUState *s)
     bool wrap = false;
 
     head = smmu_read32_reg(s, SMMU_REG_CMDQ_PROD);
-    tail = smmu_read32_reg(s, SMMU_REG_CMDQ_CONS);
+    //tail = smmu_read32_reg(s, SMMU_REG_CMDQ_CONS);
+    q->prod = head;
+    tail = Q_IDX(q, q->cons);
 
-    head &= ~(1 << q->size);
-    tail &= ~(1 << q->size);
-
-    SMMU_DPRINTF(DEBUG, "q->size:%d head:%lx, tail:%lx\n", q->size, head, tail);
+    SMMU_DPRINTF(DEBUG, "CMDQ size:%d head:%lx, tail:%lx\n", q->entries, head, tail);
 
     while (!SMMU_CMDQ_ERR(s) && (tail != head)) {
         cmd_t cmd;
@@ -448,7 +501,7 @@ static int smmu_cmdq_consume(SMMUState *s)
         }
 
         tail++;
-        if (tail == (1 << q->size)) {
+        if (tail == q->entries) {
             SMMU_DPRINTF(CRIT, "TAIL: wrapped\n");
             tail = 0;
             wrap = true;
@@ -465,33 +518,34 @@ out_while:
     }
 
     if (wrap)
-        tail |= 1 << (q->size + 1);
+        tail ^= 1 << q->shift;
 
     SMMU_DPRINTF(DEBUG, "head:%lx, tail:%lx\n", head, tail);
 
     /* Update tail pointer */
     smmu_write32_reg(s, SMMU_REG_CMDQ_CONS, tail);
+    q->cons = tail;
 
     return 0;
 }
 
 static void smmu_update(SMMUState *s)
 {
+    int error = 0;
+
     /* Sanity check, do nothing if not enabled */
-    if (!smmu_enabled(s)) {
+    if (!smmu_enabled(s))
         SMMU_DPRINTF(CRIT, "NOT ENABLED\n");
-        return;
-    }
 
     /* EVENT Q updates takes more priority */
-    if (smmu_evt_q_enabled(s) && smmu_evtq_update(s)) {
-    }
+    if ((smmu_evt_q_enabled(s)))
+        error = smmu_evtq_update(s);
 
-    if (smmu_cmd_q_enabled(s) && smmu_cmdq_consume(s)) {
-        /* If Command can't be consumed, should be reported as an
-         * Event on EVENT queue
-         */
-        //smmu_report_event(s, );
+    if (error)
+        smmu_create_event(s, 0, 0, 0, error);
+
+    if (smmu_cmd_q_enabled(s)) {
+        smmu_cmdq_consume(s);
     }
 }
 
@@ -508,7 +562,7 @@ static void smmu_write_mmio(void *opaque, hwaddr addr,
                  smmu_read_mmio(opaque, addr, size), val);
 
     switch (addr) {
-    case SMMU_REG_IRQ_CTRL:     /* Update the ACK as well */
+    case SMMU_REG_IRQ_CTRL:     /* Update the ACK as well, fallthrough */
         for (i = 0; i < 4; i++)
             if (!(val & (1 << i))) qemu_irq_lower(s->irq[i]);
     case SMMU_REG_CR0:
@@ -522,9 +576,9 @@ static void smmu_write_mmio(void *opaque, hwaddr addr,
         smmu_write32_reg(s, SMMU_REG_GERROR, val32);
         break;
     case SMMU_REG_CMDQ_BASE ... SMMU_REG_CMDQ_CONS:
-        q = &s->cmdq; break;
+        q = &s->cmdq; q->ent_size = sizeof(cmd_t); break;
     case SMMU_REG_EVTQ_BASE ... SMMU_REG_EVTQ_IRQ_CFG1:
-        q = &s->evtq; break;
+        q = &s->evtq; q->ent_size = sizeof(evt_t); break;
     case SMMU_REG_STRTAB_BASE:
         break;
     case SMMU_REG_STRTAB_BASE_CFG:
@@ -561,28 +615,22 @@ static void smmu_write_mmio(void *opaque, hwaddr addr,
         case SMMU_REG_CMDQ_BASE:
         case SMMU_REG_EVTQ_BASE:
             q->base = val & ~0x1f;
-            q->size = val & 0x1f;
+            q->shift = val & 0x1f;
+            q->entries = 1 << (q->shift);
             break;
         case SMMU_REG_CMDQ_PROD:
-            check_queue = 1;
         case SMMU_REG_EVTQ_PROD:
-            q->prod = val & ~(1 << q->size);
+            check_queue = 1;
             break;
         case SMMU_REG_EVTQ_CONS:
-            check_queue = 1;
         case SMMU_REG_CMDQ_CONS:
-            q->cons = val & ~(1 << q->size);
+            check_queue = 1;
             break;
         }
     }
 
-    if (check_queue) {
-        if (smmu_cmd_q_enabled(s) && smmu_cmdq_consume(s)) {
-            /* Result in Error if not returned with 0 */
-        }
-
+    if (check_queue)
         smmu_update(s);
-    }
 }
 
 static const MemoryRegionOps smmu_mem_ops = {
@@ -656,8 +704,8 @@ static void _smmu_populate_regs(SMMUState *s)
 
     smmu_write32_reg(s, SMMU_REG_IDR5, val);
 
-    s->cmdq.size = (smmu_read32_reg(s, SMMU_REG_IDR1) >> 21) & 0x1f;
-    s->evtq.size = (smmu_read32_reg(s, SMMU_REG_IDR1) >> 16) & 0x1f;
+    s->cmdq.entries = (smmu_read32_reg(s, SMMU_REG_IDR1) >> 21) & 0x1f;
+    s->evtq.entries = (smmu_read32_reg(s, SMMU_REG_IDR1) >> 16) & 0x1f;
 }
 
 static int smmu_init(SysBusDevice *dev)

@@ -194,8 +194,8 @@ enum {
 #define CMD_ADDR_LO_SHIFT 12
 #define CMD_ADDR_LO_BITS  20
 
-#define __SET_FLD(array, idx, mask, shift, val)		\
-    ({ array[(idx)] |= ((val) & (mask)) << (shift); })
+#define __SET_FLD(var, mask, shift, val)        \
+    ({ var |= ((val) & (mask)) << (shift); })
 
 #define __GET_FLD(val, mask, shift)		\
     (((val) >> (shift)) & (mask))
@@ -282,9 +282,43 @@ enum {
 #define EVT_S2_SHIFT	7
 #define EVT_CLS_BITS	2
 #define EVT_CLS_SHIFT	8
-#define __EVT_GET_FLD(x, off, val)                              \
+#define __EVT_SET_FLD(x, off, name, val)                         \
+    (__SET_FLD((x)->word[(off)], __SMMU_MASK(EVT_##name##_BITS), \
+               EVT_##name##_SHIFT, val))
+
+#define __EVT_GET_FLD(x, off, val)                               \
     (__GET_FLD((x)->word[(off)], __SMMU_MASK(EVT_##val##_BITS),  \
                EVT_##val##_SHIFT))
+
+#define EVT_SET_TYPE(x, t)    __EVT_SET_FLD((x), 0, EVT, t)
+#define EVT_SET_ME(x, m)      __EVT_SET_FLD((x), 0, ME, m)
+#define EVT_SET_SSV(x, s)     __EVT_SET_FLD((x), 0, SSV, s)
+#define EVT_SET_SSID(x, s)    __EVT_SET_FLD((x), 0, SSID, s)
+#define EVT_SET_SID(x, s)     ((x)->word[1] =  s)
+#define EVT_SET_SPAN(x, s)    __EVT_SET_FLD((x), 2, SPAN, s)
+#define EVT_SET_P(x, s)       __EVT_SET_FLD((x), 2, P, s)
+#define EVT_SET_X(x, s)       __EVT_SET_FLD((x), 2, X, s)
+#define EVT_SET_W(x, s)       __EVT_SET_FLD((x), 2, W, s)
+#define EVT_SET_R(x, s)       __EVT_SET_FLD((x), 2, R, s)
+#define EVT_SET_PNU(x, s)     __EVT_SET_FLD((x), 3, PNU, s)
+#define EVT_SET_IND(x, s)     __EVT_SET_FLD((x), 3, IND, s)
+#define EVT_SET_RNW(x, s)     __EVT_SET_FLD((x), 3, RNW, s)
+#define EVT_SET_S2(x, s)      __EVT_SET_FLD((x), 3, S2, s)
+#define EVT_SET_CLS(x, s)     __EVT_SET_FLD((x), 3, CLS, s)
+#define EVT_SET_EFF_IND(x, s) __SET_FLD((x)->word[3], __SMMU_MASK(1), 12, s)
+#define EVT_SET_EFF_RNW(x, s) __SET_FLD((x)->word[3], __SMMU_MASK(1), 13, s)
+#define EVT_SET_INPUT_ADDR(x, addr) ({                               \
+            (x)->word[5] = (uint32_t)(addr >> 32);                   \
+            (x)->word[4] = (uint32_t)(addr & 0xffffffff);            \
+            addr;                                                    \
+        })
+
+#define EVT_SET_ADDR_FETCH2(x, addr) ({                     \
+            (x)->word[7] = (uint32_t)(addr >> 32);          \
+            (x)->word[6] = (uint32_t)(addr & 0xffffffff);   \
+        })
+
+#define EVT_SET_IPA(x, addr) EVT_SET_ADDR_FETCH(x, addr)
 
 #define EVT_TYPE(x)      __EVT_GET_FLD((x), 0, EVT)
 #define EVT_ME(x)        __EVT_GET_FLD((x), 0, ME)
