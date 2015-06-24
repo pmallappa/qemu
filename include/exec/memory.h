@@ -153,6 +153,8 @@ typedef struct MemoryRegionIOMMUOps MemoryRegionIOMMUOps;
 struct MemoryRegionIOMMUOps {
     /* Return a TLB entry that contains a given address. */
     IOMMUTLBEntry (*translate)(MemoryRegion *iommu, hwaddr addr, bool is_write);
+    IOMMUTLBEntry (*translate_dev)(MemoryRegion *iommu, DeviceState *dev, 
+					hwaddr addr, bool is_write);
 };
 
 typedef struct CoalescedMemoryRange CoalescedMemoryRange;
@@ -1132,6 +1134,7 @@ void address_space_destroy(AddressSpace *as);
 
 /**
  * address_space_rw: read from or write to an address space.
+ * address_space_rw_dev: A variant of address_space_rw, to pass on requesting device id.
  *
  * Return a MemTxResult indicating whether the operation succeeded
  * or failed (eg unassigned memory, device rejected the transaction,
@@ -1147,6 +1150,8 @@ MemTxResult address_space_rw(AddressSpace *as, hwaddr addr,
                              MemTxAttrs attrs, uint8_t *buf,
                              int len, bool is_write);
 
+MemTxResult address_space_rw_dev(AddressSpace *as, DeviceState *dev, hwaddr addr,
+				 MemTxAttrs attrs, uint8_t *buf, int len, bool is_write);
 /**
  * address_space_write: write to address space.
  *
@@ -1258,6 +1263,10 @@ void address_space_stq(AddressSpace *as, hwaddr addr, uint64_t val,
  * @is_write: indicates the transfer direction
  */
 MemoryRegion *address_space_translate(AddressSpace *as, hwaddr addr,
+                                      hwaddr *xlat, hwaddr *len,
+                                      bool is_write);
+
+MemoryRegion *address_space_translate_dev(AddressSpace *as, DeviceState *dev, hwaddr addr,
                                       hwaddr *xlat, hwaddr *len,
                                       bool is_write);
 
