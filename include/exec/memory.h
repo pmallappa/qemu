@@ -1182,7 +1182,6 @@ MemTxResult address_space_write(AddressSpace *as, hwaddr addr,
  */
 MemTxResult address_space_read(AddressSpace *as, hwaddr addr, MemTxAttrs attrs,
                                uint8_t *buf, int len);
-
 /**
  * address_space_ld*: load from an address space
  * address_space_st*: store to an address space

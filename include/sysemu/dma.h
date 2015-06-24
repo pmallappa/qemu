@@ -11,6 +11,7 @@
 #define DMA_H
 
 #include <stdio.h>
+#include "exec/memattrs.h"
 #include "exec/memory.h"
 #include "exec/address-spaces.h"
 #include "hw/hw.h"
@@ -89,7 +90,7 @@ static inline int dma_memory_rw_relaxed_dev(AddressSpace *as, DeviceState *dev,
 					 dma_addr_t addr, void *buf, dma_addr_t len,
                                          DMADirection dir)
 {
-    return address_space_rw_dev(as, dev, addr, MEMTXATTRS_UNSPCIFIED,
+    return address_space_rw_dev(as, dev, addr, MEMTXATTRS_UNSPECIFIED,
 				buf, len, dir == DMA_DIRECTION_FROM_DEVICE);
 }
 
