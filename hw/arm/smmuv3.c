@@ -181,28 +181,54 @@ static uint16_t smmu_find_sid(DeviceState *dev)
     return pci_get_arid(pcidev);
 }
 
+/*
+ * Heavily based on target-arm/helper.c get_phys_addr()
+ * hold on to your cursings...
+ */
+static int
+smmu_get_phys_addr_lape(SMMUState *s, ste_t *ste, cd_t *cd, bool is_write)
+{
+    uint32_t t0sz = CD_T0SZ(cd);
+    return 0;
+}
+
 static int smmu_walk_pgtable(SMMUState *s, ste_t *ste, cd_t *cd,
-                             IOMMUTLBEntry *tlbe)
+                             IOMMUTLBEntry *tlbe, bool is_write)
 {
     uint64_t ttbr = 0;
     int retval = 0;
+    uint32_t ste_cfg = STE_CONFIG(ste);
+    hwaddr_t ipa, opa;          /* Input address, output address */
 
-    switch(STE_CONFIG(ste)) {
-    case STE_CONFIG_S1BY_S2BY:  /* No Change */
+    SMMU_DPRINTF(DBG, "ste_cfg :%x\n", ste_cfg);
+    /* Both Bypass, we dont need to do anything */
+    if (ste_cfg == STE_CONFIG_S1BY_S2BY)
         return 0;
-    case STE_CONFIG_S1TR_S2BY:
-        ttbr = CD_TTB0(cd);
-        ttbr = CD_TTB1(cd);
-        break;
-    default:
+
+    ipa = tlbe->iova;
+    SMMU_DPRINTF(DBG, "Before Stage1 Input addr: %llx\n", ipa);
+
+    if (ste_cfg == STE_CONFIG_S1TR_S2BY || ste_cfg == STE_CONFIG_S1TR_S2TR) {
+        if (CD_EPD0(cd))
+            ttbr = CD_TTB1(cd);
+        else
+            ttbr = CD_TTB0(cd);
+
+
+
+    }
+
+    ipa = opa;
+
+    SMMU_DPRINTF(DBG, "Stage1 tanslated :%llx\n ", opa);
+
+    if (ste_cfg == STE_CONFIG_S1BY_S2TR || ste_cfg == STE_CONFIG_S1TR_S2TR) {
         ttbr = STE_S2TTB(ste);
-        SMMU_DPRINTF(DEBUG, "Other PageTable Walks not supported\n");
-        break;
     }
 
-    if (ttbr) {
+    SMMU_DPRINTF(DBG, "Stage2 tanslated :%llx\n ", opa);
 
-    }
+    tlbe->translated_addr = opa;
 
     return retval;
 }
@@ -364,7 +390,7 @@ smmu_translate_dev(MemoryRegion *iommu, DeviceState *dev,
         break;
     }
 
-    error = smmu_walk_pgtable(s, &ste, cd, &ret);
+    error = smmu_walk_pgtable(s, &ste, cd, &ret, is_write);
 
 error_out:
     if (error) {        /* Post the Error using Event Q */
@@ -549,47 +575,84 @@ static void smmu_update(SMMUState *s)
     }
 }
 
+static inline void
+smmu_update_q(SMMUState *s, SMMUQueue *q, val)
+{
+    q->base = val & ~0x1f;
+    q->shift = val & 0x1f;
+    q->entries = 1 << (q->shift);
+}
+
 static void smmu_write_mmio(void *opaque, hwaddr addr,
-                           uint64_t val, unsigned size)
+                            uint64_t val, unsigned size)
 {
     SMMUState *s = opaque;
     struct SMMUQueue *q = NULL;
     bool check_queue = false;
     uint32_t val32 = (uint32_t)val;
+    bool is64 = false;
     int i;
 
     SMMU_DPRINTF(DEBUG, "reg:%lx cur: %lx new: %lx\n", addr,
                  smmu_read_mmio(opaque, addr, size), val);
 
+    /*
+     * We update the ACK registers, actual write takes place after
+     * the switch-case
+     */
+
     switch (addr) {
-    case SMMU_REG_IRQ_CTRL:     /* Update the ACK as well, fallthrough */
+    case SMMU_REG_IRQ_CTRL:     /* Update the ACK as well */
+        val &= 0xf;
+
         for (i = 0; i < 4; i++)
-            if (!(val & (1 << i))) qemu_irq_lower(s->irq[i]);
-    case SMMU_REG_CR0:
-        smmu_write32_reg(s, addr, val32);
+            if (!(val & (1 << i)))
+                qemu_irq_lower(s->irq[i]);
+
         smmu_write32_reg(s, addr + 4, val32);
-        return;
+        break;
+
+    case SMMU_REG_CR0:
+        smmu_write32_reg(s, addr + 4, val32);
+        smmu_update(s);         /* Start processing as soon as enabled */
+        break;
+
     case SMMU_REG_GERRORN:
         if (smmu_read32_reg(s, SMMU_REG_GERROR) == val32)
             qemu_irq_lower(s->irq[SMMU_IRQ_GERROR]);
 
         smmu_write32_reg(s, SMMU_REG_GERROR, val32);
         break;
-    case SMMU_REG_CMDQ_BASE ... SMMU_REG_CMDQ_CONS:
-        q = &s->cmdq; q->ent_size = sizeof(cmd_t); break;
-    case SMMU_REG_EVTQ_BASE ... SMMU_REG_EVTQ_IRQ_CFG1:
-        q = &s->evtq; q->ent_size = sizeof(evt_t); break;
-    case SMMU_REG_STRTAB_BASE:
+
+    case SMMU_REG_CMDQ_BASE:
+        is64 = true;
+        smmu_update_q(s, &s->cmdq, val); break;
+
+    case SMMU_REG_EVTQ_BASE:
+        is64 = true;
+        smmu_update_q(s, &s->evtq, val); break;
+
+    case SMMU_REG_CMDQ_PROD:    case SMMU_REG_EVTQ_PROD:
+    case SMMU_REG_EVTQ_CONS:    case SMMU_REG_CMDQ_CONS:
+        check_queue = 1;
         break;
+
+    case SMMU_REG_STRTAB_BASE:
+        is64 = true;
+        break;
+
     case SMMU_REG_STRTAB_BASE_CFG:
+        is64 = true;
         if (((val32 >> 16) & 0x3) == 0x1) {
             s->sid_split = (val32 >> 6) & 0x1f;
             s->features |= SMMU_FEATURE_2LVL_STE;
         }
         break;
+
     case SMMU_REG_PRIQ_BASE ... SMMU_REG_PRIQ_IRQ_CFG1:
         SMMU_DPRINTF(CRIT, "Trying to write to PRIQ, not implemented\n");
         break;
+
     default:
     case SMMU_REG_STATUSR:
     case 0xFDC ... 0xFFC:
@@ -598,36 +661,10 @@ static void smmu_write_mmio(void *opaque, hwaddr addr,
         return;
     }
 
-    switch (addr) {
-    case SMMU_REG_STRTAB_BASE:
-    case SMMU_REG_STRTAB_BASE_CFG:
-    case SMMU_REG_CMDQ_BASE:
-    case SMMU_REG_EVTQ_IRQ_CFG0:
-    case SMMU_REG_EVTQ_IRQ_CFG1:
-    case SMMU_REG_PRIQ_BASE:
+    if (is64)
         smmu_write64_reg(s, addr, val); break;
-    default:
+    else
         smmu_write32_reg(s, addr, val32); break;
-    }
-
-    if (q) {
-        switch (addr)  {
-        case SMMU_REG_CMDQ_BASE:
-        case SMMU_REG_EVTQ_BASE:
-            q->base = val & ~0x1f;
-            q->shift = val & 0x1f;
-            q->entries = 1 << (q->shift);
-            break;
-        case SMMU_REG_CMDQ_PROD:
-        case SMMU_REG_EVTQ_PROD:
-            check_queue = 1;
-            break;
-        case SMMU_REG_EVTQ_CONS:
-        case SMMU_REG_CMDQ_CONS:
-            check_queue = 1;
-            break;
-        }
-    }
 
     if (check_queue)
         smmu_update(s);
@@ -705,7 +742,9 @@ static void _smmu_populate_regs(SMMUState *s)
     smmu_write32_reg(s, SMMU_REG_IDR5, val);
 
     s->cmdq.entries = (smmu_read32_reg(s, SMMU_REG_IDR1) >> 21) & 0x1f;
+    s->cmdq.ent_size = sizeof(cmd_t);
     s->evtq.entries = (smmu_read32_reg(s, SMMU_REG_IDR1) >> 16) & 0x1f;
+    s->evtq.ent_size = sizeof(evt_t);
 }
 
 static int smmu_init(SysBusDevice *dev)
