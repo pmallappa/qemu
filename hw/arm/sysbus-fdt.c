@@ -27,6 +27,7 @@
 #include "hw/platform-bus.h"
 #include "sysemu/sysemu.h"
 #include "hw/vfio/vfio-platform.h"
+#include "hw/vfio/vfio-smmu.h"
 #include "hw/vfio/vfio-calxeda-xgmac.h"
 #include "hw/arm/fdt.h"
 
@@ -55,6 +56,44 @@ typedef struct NodeCreationPair {
     const char *typename;
     int (*add_fdt_node_fn)(SysBusDevice *sbdev, void *opaque);
 } NodeCreationPair;
+
+VFIOSmmuDevice *vsmmu = NULL;
+
+static int add_arm_smmu_fdt_node(SysBusDevice *sbdev, void *opaque)
+{
+    PlatformBusFDTData *data = opaque;
+    vsmmu = VFIO_SMMU_DEVICE(sbdev);
+    void *fdt = data->fdt;
+    const char *nodename;
+    uint32_t reg_attr[4], irq_attr[3];
+    uint32_t gint = 0;
+
+    nodename = g_strdup_printf("/smmu@%" PRIx64, vsmmu->base);
+
+    qemu_fdt_add_subnode(fdt, nodename);
+    qemu_fdt_setprop(fdt, nodename, "compatible", "arm,smmu-v2", 12);
+
+    reg_attr[0] = 0;
+    reg_attr[1] = cpu_to_be32(vsmmu->base);
+    reg_attr[2] = 0;
+    reg_attr[3] = cpu_to_be32(vsmmu->size);
+
+    qemu_fdt_setprop(fdt, nodename, "reg",
+            reg_attr, 4*sizeof(uint32_t));
+
+    /* Add dummy interrupt */
+    irq_attr[0] = 0;
+    irq_attr[1] = 0;
+    irq_attr[2] = 0;
+
+    qemu_fdt_setprop(fdt, nodename, "interrupts",
+            irq_attr, 3*sizeof(uint32_t));
+
+    qemu_fdt_setprop(fdt, nodename, "#global-interrupts", &gint,
+            sizeof(uint32_t));
+
+    return 0;
+}
 
 /* Device Specific Code */
 
@@ -125,6 +164,7 @@ fail_reg:
 
 /* list of supported dynamic sysbus devices */
 static const NodeCreationPair add_fdt_node_functions[] = {
+    {TYPE_VFIO_SMMU, add_arm_smmu_fdt_node},
     {TYPE_VFIO_CALXEDA_XGMAC, add_calxeda_midway_xgmac_fdt_node},
     {"", NULL}, /* last element */
 };
