@@ -78,6 +78,8 @@ struct SMMUQueue {
     uint8_t  shift;             /* Size in log2 */
 };
 
+typedef struct SMMUQueue SMMUQueue;
+
 #define Q_ENTRY(q, idx) (q->base + q->ent_size * idx)
 #define Q_WRAP(q, pc) ((pc) >> (q)->shift)
 #define Q_IDX(q, pc) ((pc) & __SMMU_MASK((q)->entries))
@@ -93,7 +95,7 @@ typedef struct SMMUState {
     bool             virtual;
     bool             in_line;
 
-    struct SMMUQueue cmdq, evtq;
+    SMMUQueue cmdq, evtq;
 
 #define SMMU_FEATURE_2LVL_STE   (1<<0)
     struct {
@@ -185,48 +187,40 @@ static uint16_t smmu_find_sid(DeviceState *dev)
  * Heavily based on target-arm/helper.c get_phys_addr()
  * hold on to your cursings...
  */
-static int
-smmu_get_phys_addr_lape(SMMUState *s, ste_t *ste, cd_t *cd, bool is_write)
-{
-    uint32_t t0sz = CD_T0SZ(cd);
-    return 0;
-}
-
 static int smmu_walk_pgtable(SMMUState *s, ste_t *ste, cd_t *cd,
                              IOMMUTLBEntry *tlbe, bool is_write)
 {
     uint64_t ttbr = 0;
     int retval = 0;
     uint32_t ste_cfg = STE_CONFIG(ste);
-    hwaddr_t ipa, opa;          /* Input address, output address */
+    hwaddr ipa, opa;          /* Input address, output address */
 
-    SMMU_DPRINTF(DBG, "ste_cfg :%x\n", ste_cfg);
+    SMMU_DPRINTF(DEBUG, "ste_cfg :%x\n", ste_cfg);
     /* Both Bypass, we dont need to do anything */
     if (ste_cfg == STE_CONFIG_S1BY_S2BY)
         return 0;
 
     ipa = tlbe->iova;
-    SMMU_DPRINTF(DBG, "Before Stage1 Input addr: %llx\n", ipa);
+    SMMU_DPRINTF(DEBUG, "Before Stage1 Input addr: %lx\n", ipa);
 
     if (ste_cfg == STE_CONFIG_S1TR_S2BY || ste_cfg == STE_CONFIG_S1TR_S2TR) {
         if (CD_EPD0(cd))
             ttbr = CD_TTB1(cd);
         else
             ttbr = CD_TTB0(cd);
-
-
-
     }
+
+    SMMU_DPRINTF(DEBUG, "Stage1 tanslated :%lx\n ", ttbr);
 
     ipa = opa;
 
-    SMMU_DPRINTF(DBG, "Stage1 tanslated :%llx\n ", opa);
+    SMMU_DPRINTF(DEBUG, "Stage1 tanslated :%lx\n ", opa);
 
     if (ste_cfg == STE_CONFIG_S1BY_S2TR || ste_cfg == STE_CONFIG_S1TR_S2TR) {
         ttbr = STE_S2TTB(ste);
     }
 
-    SMMU_DPRINTF(DBG, "Stage2 tanslated :%llx\n ", opa);
+    SMMU_DPRINTF(DEBUG, "Stage2 tanslated :%lx\n ", opa);
 
     tlbe->translated_addr = opa;
 
@@ -248,16 +242,16 @@ static cd_t *smmu_get_cd(SMMUState *s, ste_t *ste, uint32_t ssid)
 static int smmu_read_sysmem(SMMUState *s, hwaddr addr,
                             void *buf, dma_addr_t len)
 {
-    return address_space_rw(&address_space_memory,
-                            addr, buf, len, false);
+    return address_space_read(&address_space_memory,
+                              addr, MEMTXATTRS_UNSPECIFIED, buf, len);
 
 }
 
 static int smmu_write_sysmem(SMMUState *s, hwaddr addr,
                             void *buf, dma_addr_t len)
 {
-    return address_space_rw(&address_space_memory,
-                            addr, buf, len, true);
+    return address_space_write(&address_space_memory,
+                               addr, MEMTXATTRS_UNSPECIFIED, buf, len);
 
 }
 
@@ -268,28 +262,39 @@ static int smmu_write_sysmem(SMMUState *s, hwaddr addr,
             hi << 32 | lo;                              \
         })
 
-#define STMSPAN(stm) (stm)->word[0] & 0x1f;
+#define STMSPAN(stm) (1 << ((stm)->word[0] & 0x1f))
 
 static int smmu_find_ste(SMMUState *s, uint16_t sid, ste_t *ste)
 {
-    int l1_ste_offset = sid, l2_ste_offset;
     hwaddr addr;
+
+    /* Check SID range */
+    if (sid > (1 << s->sid_size))
+        return SMMU_EVT_C_BAD_SID;
 
     if (s->features & SMMU_FEATURE_2LVL_STE) {
         int span;
+        hwaddr stm_addr;
+        stm_t stm;
+        int l1_ste_offset, l2_ste_offset;
 
-        l1_ste_offset = sid >> (s->sid_size - s->sid_split);
+        if (sid > (1 << s->sid_split))
+            return SMMU_EVT_C_BAD_STE;
+
+        l1_ste_offset = sid >> s->sid_split;
         l2_ste_offset = sid & ~(1 << s->sid_split);
 
-        stm_t *stm = (stm_t *)(s->strtab_base + l1_ste_offset * sizeof(stm_t));
+        stm_addr = (hwaddr)(s->strtab_base + l1_ste_offset * sizeof(stm_t));
+        smmu_read_sysmem(s, stm_addr, &stm, sizeof(stm));
 
-        span = STMSPAN(stm);
+        span = STMSPAN(&stm);
+
         if (l2_ste_offset > span)
             return SMMU_EVT_C_BAD_STE;
 
-        addr = STM2U64(stm) + l2_ste_offset * sizeof(ste_t);
+        addr = STM2U64(&stm) + l2_ste_offset * sizeof(ste_t);
     } else
-        addr = s->strtab_base + l1_ste_offset * sizeof(ste_t);
+        addr = s->strtab_base + sid * sizeof(ste_t);
 
     if (smmu_read_sysmem(s, addr, ste, sizeof(ste_t)))
         return SMMU_EVT_F_UUT;
@@ -297,6 +302,9 @@ static int smmu_find_ste(SMMUState *s, uint16_t sid, ste_t *ste)
     return 0;
 }
 
+/*
+ * We notify the system using events
+ */
 static void smmu_create_event(SMMUState *s, hwaddr iova,
                               uint32_t sid, bool is_write, int error)
 {
@@ -339,12 +347,19 @@ set_overflow:
     smmu_write32_reg(s, SMMU_REG_EVTQ_PROD, head);
 }
 
+/*
+ * SMMU Spec differentiates, 3 types of transactions,
+ * here we assume only ATS transaction. Others are used in an
+ * inline SMMU where every transaction goes via SMMU.
+ * pci_dma_read(write) only will call this function.
+ */
+
 static IOMMUTLBEntry
 smmu_translate_dev(MemoryRegion *iommu, DeviceState *dev,
                    hwaddr addr, bool is_write)
 {
     int error = 0;
-    uint16_t sid;
+    uint16_t sid = 0;
     ste_t ste;
     cd_t *cd;
     SMMUState *s = container_of(iommu, SMMUState, iommu);
@@ -363,20 +378,24 @@ smmu_translate_dev(MemoryRegion *iommu, DeviceState *dev,
         goto bypass;
     }
 
-    if (dev == NULL)
-        sid = 0;
-    else
+    if (dev == NULL) {
+        SMMU_DPRINTF(CRIT, "Device is NULL, dont know from where we got called\n");
+    } else
         sid = smmu_find_sid(dev);
+
     SMMU_DPRINTF(CRIT, "SID:%x\n", sid);
 
     error = smmu_find_ste(s, sid, &ste);
-    if (error | !STE_VALID(&ste)) {
+    if (error) goto error_out;  /* F_STE_FETCH or F_CFG_CONFLICT */
+
+    if (!STE_VALID(&ste)) {
         error = SMMU_EVT_C_BAD_STE;
         goto error_out;
     }
 
     switch(STE_CONFIG(&ste)) {
     case STE_CONFIG_S1BY_S2BY:
+        /*  */
         goto bypass;
     case STE_CONFIG_S1TR_S2BY:
         cd = smmu_get_cd(s, &ste, 0); /* We dont have SSID, so 0 */
@@ -410,8 +429,8 @@ out:
 /*
  * smmu_translate: this is called when device does a
  * pci_dma_{read,write}() or similar
- * Need to get the device's streamid which is nothing but PCI
- * requestor id (RID)
+ * Need to get the device's streamid which is equivalent of
+ * PCI RID/ARID
  *
  */
 static IOMMUTLBEntry
@@ -514,7 +533,7 @@ static int smmu_cmdq_consume(SMMUState *s)
             {                /* Check if we are coming here */
                 int i;
                 /*    Actually we should interrupt  */
-                SMMU_DPRINTF(CRIT, "Unknown Command type: %lx, ignoring\n",
+                SMMU_DPRINTF(CRIT, "Unknown Command type: %x, ignoring\n",
                              CMD_TYPE(&cmd));
                 for (i = 0; i < ARRAY_SIZE(cmd.word); i++) {
                     SMMU_DPRINTF(CRIT, "CMD[%2d]: %#010x\t CMD[%2d]: %#010x\n",
@@ -576,7 +595,7 @@ static void smmu_update(SMMUState *s)
 }
 
 static inline void
-smmu_update_q(SMMUState *s, SMMUQueue *q, val)
+smmu_update_q(SMMUState *s, SMMUQueue *q, uint32_t val)
 {
     q->base = val & ~0x1f;
     q->shift = val & 0x1f;
@@ -587,7 +606,7 @@ static void smmu_write_mmio(void *opaque, hwaddr addr,
                             uint64_t val, unsigned size)
 {
     SMMUState *s = opaque;
-    struct SMMUQueue *q = NULL;
+    //struct SMMUQueue *q = NULL;
     bool check_queue = false;
     uint32_t val32 = (uint32_t)val;
     bool is64 = false;
@@ -662,9 +681,9 @@ static void smmu_write_mmio(void *opaque, hwaddr addr,
     }
 
     if (is64)
-        smmu_write64_reg(s, addr, val); break;
+        smmu_write64_reg(s, addr, val);
     else
-        smmu_write32_reg(s, addr, val32); break;
+        smmu_write32_reg(s, addr, val32);
 
     if (check_queue)
         smmu_update(s);
@@ -724,13 +743,16 @@ static void _smmu_populate_regs(SMMUState *s)
 
 #define SMMU_QUEUE_SIZE_LOG2 19
 
+#define SMMU_SID_SIZE    16
+    s->sid_size = SMMU_SID_SIZE;
+
     val =
         1 << 27 |                   /* Attr Types override */
         SMMU_QUEUE_SIZE_LOG2 << 21| /* Cmd Q size */
         SMMU_QUEUE_SIZE_LOG2 << 16| /* Event Q size */
         SMMU_QUEUE_SIZE_LOG2 << 11| /* PRI Q size */
         0  << 6 |                   /* SSID not supported */
-        16 << 0 ;                   /* SID size  */
+        SMMU_SID_SIZE << 0 ;        /* SID size  */
 
     smmu_write32_reg(s, SMMU_REG_IDR1, val);
 
