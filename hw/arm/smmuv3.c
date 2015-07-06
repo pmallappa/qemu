@@ -67,7 +67,7 @@ static unsigned char dbg_bits = DBG_BIT(PANIC) | DBG_BIT(CRIT) | DBG_BIT(DEBUG);
 #define SMMU_SYS_DEV(obj) OBJECT_CHECK(SMMUSysState, (obj), TYPE_SMMU_DEV)
 #define SMMU_PCI_DEV(obj) OBJECT_CHECK(SMMUPciState, (obj), TYPE_SMMU_DEV)
 
-struct SMMUQueue {
+typedef struct {
     hwaddr   base;
 
     uint32_t prod;
@@ -76,9 +76,7 @@ struct SMMUQueue {
     uint16_t entries;           /* Number of entries */
     uint8_t  ent_size;          /* Size of entry in bytes */
     uint8_t  shift;             /* Size in log2 */
-};
-
-typedef struct SMMUQueue SMMUQueue;
+} SMMUQueue;
 
 #define Q_ENTRY(q, idx) (q->base + q->ent_size * idx)
 #define Q_WRAP(q, pc) ((pc) >> (q)->shift)
@@ -139,7 +137,7 @@ static inline int smmu_q_enabled(SMMUState *s, uint32_t q)
     return s->regs[SMMU_REG_CR0] & q;
 }
 
-static inline int smmu_q_full(struct SMMUQueue *q)
+static inline int smmu_q_full(SMMUQueue *q)
 {
     return (q->cons == q->prod) && (Q_WRAP(q, q->cons) != Q_WRAP(q, q->prod));
 }
@@ -308,7 +306,7 @@ static int smmu_find_ste(SMMUState *s, uint16_t sid, ste_t *ste)
 static void smmu_create_event(SMMUState *s, hwaddr iova,
                               uint32_t sid, bool is_write, int error)
 {
-    struct SMMUQueue *q = &s->evtq;
+    SMMUQueue *q = &s->evtq;
     uint64_t head = Q_IDX(q, q->prod);
     bool overflow = true;
     evt_t evt;
@@ -395,7 +393,6 @@ smmu_translate_dev(MemoryRegion *iommu, DeviceState *dev,
 
     switch(STE_CONFIG(&ste)) {
     case STE_CONFIG_S1BY_S2BY:
-        /*  */
         goto bypass;
     case STE_CONFIG_S1TR_S2BY:
         cd = smmu_get_cd(s, &ste, 0); /* We dont have SSID, so 0 */
@@ -494,7 +491,7 @@ static int smmu_evtq_update(SMMUState *s)
 
 static int smmu_cmdq_consume(SMMUState *s)
 {
-    struct SMMUQueue *q = &s->cmdq;
+    SMMUQueue *q = &s->cmdq;
     uint64_t head, tail;
     uint32_t error = SMMU_CMD_ERR_NONE;
     bool wrap = false;
@@ -606,7 +603,6 @@ static void smmu_write_mmio(void *opaque, hwaddr addr,
                             uint64_t val, unsigned size)
 {
     SMMUState *s = opaque;
-    //struct SMMUQueue *q = NULL;
     bool check_queue = false;
     uint32_t val32 = (uint32_t)val;
     bool is64 = false;
