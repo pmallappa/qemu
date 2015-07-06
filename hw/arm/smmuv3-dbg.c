@@ -25,83 +25,38 @@
                 __func__, ##__VA_ARGS__);       \
     } while(0)
 
-#define STE_S1FMT_BITS      2
-#define STE_S1FMT_SHIFT     (STE_CONFIG_SHIFT + STE_CONFIG_BITS)
-#define STE_S1CIR_BITS      2
-#define STE_S1CIR_SHIFT     (STE_S1DSS_SHIFT + STE_S1DSS_BITS)
-#define STE_S1COR_BITS      2
-#define STE_S1COR_SHIFT     (STE_S1CIR_SHIFT + STE_S1CIR_BITS)
-#define STE_S1CSH_BITS      2
-#define STE_S1CSH_SHIFT     (STE_S1COR_SHIFT + STE_S1COR_BITS)
-#define STE_S1CDMAX_BITS    2
-//#define STE_S1CDMAX_SHIFT   (STE_S1CSH_SHIFT + STE_S1CSH_BITS)
-#define STE_CONT_BITS       4
-#define STE_CONT_SHIFT      (STE_S1CDMAX_SHIFT + STE_S1CDMAX_BITS)
-#define STE_PPAR_BITS       1
-#define STE_PPAR_SHIFT      (STE_CONT_SHIFT + STE_CONT_BITS + 1)
-#define STE_MEV_BITS        1
-#define STE_MEV_SHIFT       (STE_PPAR_SHIFT + STE_PPAR_BITS)
-#define STE_S1STALLD_BITS   1
-#define STE_S1STALLD_SHIFT  (STE_MEV_SHIFT + STE_MEV_BITS + 7)
-#define STE_EATS_BITS       2
-#define STE_EATS_SHIFT      (STE_S1STALLD_SHIFT + STE_S1STALLD_BITS)
-#define STE_STRW_BITS       2
-#define STE_STRW_SHIFT      (STE_EATS_SHIFT + STE_EATS_BITS)
-#define STE_MEMATTR_BITS    4	/* WORD 3 */
-#define STE_MEMATTR_SHIFT   0
-#define STE_MTCFG_BITS     1
-#define STE_MTCFG_SHIFT    (STE_MEMATTR_SHIFT + STE_MEMATTR_BITS)
-#define STE_ALLOCCFG_BITS   4
-#define STE_ALLOCCFG_SHIFT (STE_MTCFG_SHIFT + STE_MTCFG_BITS)
-#define STE_SHCFG_BITS     2
-#define STE_SHCFG_SHIFT    (STE_ALLOCCFG_SHIFT + STE_ALLOCCFG_BITS + 3)
-#define STE_NSCFG_BITS     2
-#define STE_NSCFG_SHIFT    (STE_SHCFG_SHIFT + STE_SHCFG_BITS)
-#define STE_PRIVCFG_BITS   2
-#define STE_PRIVCFG_SHIFT  (STE_NSCFG_SHIFT + STE_NSCFG_BITS)
-#define STE_INSTCFG_BITS   2
-#define STE_INSTCFG_SHIFT  (STE_PRIVCFG_SHIFT + STE_PRIVCFG_BITS)
-#define STE_S2ENDIAN_BITS   1
-#define STE_S2ENDIAN_SHIFT  (STE_S2AA64_SHIFT + STE_S2AA64_BITS)
-#define STE_S2AFFD_BITS     1
-#define STE_S2AFFD_SHIFT    (STE_S2ENDIAN_SHIFT + STE_S2ENDIAN_BITS)
-#define STE_S2PTW_BITS      1
-#define STE_S2PTW_SHIFT     (STE_S2AFFD_SHIFT + STE_S2AFFD_BITS)
-#define STE_S2HD_BITS       1
-#define STE_S2HD_SHIFT      (STE_S2PTW_SHIFT + STE_S2PTW_BITS)
-#define STE_S2HA_BITS       1
-#define STE_S2HA_SHIFT      (STE_S2HD_SHIFT + STE_S2HD_BITS)
-#define STE_S2S_BITS        1
-#define STE_S2S_SHIFT       (STE_S2HA_SHIFT + STE_S2HA_BITS)
-#define STE_S2R_BITS        1
-#define STE_S2R_SHIFT       (STE_S2S_SHIFT + STE_S2S_BITS)
 
-#define STE_S1FMT(x)    _STE_GET_FLD((x), 0, S1FMT)
-#define STE_S1DSS(x)    _STE_GET_FLD((x), 2, S1DSS) /* 2 */
-#define STE_S1CIR(x)    _STE_GET_FLD((x), 2, S1CIR)
-#define STE_S1COR(x)    _STE_GET_FLD((x), 2, S1COR)
-#define STE_S1CSH(x)    _STE_GET_FLD((x), 2, S1CSH)
-#define STE_S1CDMAX(x)  _STE_GET_FLD((x), 2, S1CDMAX)
-#define STE_CONT(x)     _STE_GET_FLD((x), 2, CONT)
-#define STE_PPAR(x)     _STE_GET_FLD((x), 2, PPAR)
-#define STE_MEV(x)      _STE_GET_FLD((x), 2, MEV)
-#define STE_S1STALLD(x) _STE_GET_FLD((x), 2, S1STALLD)
-#define STE_EATS(x)     _STE_GET_FLD((x), 2, EATS)
-#define STE_STRW(x)     _STE_GET_FLD((x), 2, STRW)
-#define STE_MEMATTR(x)  _STE_GET_FLD((x), 3, MEMATTR) /* 3 */
-#define STE_MTCFG(x)    _STE_GET_FLD((x), 3, MTCFG)
-#define STE_ALLOCCFG(x) _STE_GET_FLD((x), 3, ALLOCCFG)
-#define STE_SHCFG(x)    _STE_GET_FLD((x), 3, SHCFG)
-#define STE_NSCFG(x)    _STE_GET_FLD((x), 3, NSCFG)
-#define STE_PRIVCFG(x)  _STE_GET_FLD((x), 3, PRIVCFG)
-#define STE_INSTCFG(x)  _STE_GET_FLD((x), 3, INSTCFG)
-#define STE_S2ENDIAN(x) _STE_GET_FLD((x), 5, S2ENDIAN)
-#define STE_S2AFFD(x)   _STE_GET_FLD((x), 5, S2AFFD)
-#define STE_S2PTW(x)    _STE_GET_FLD((x), 5, S2PTW)
-#define STE_S2HD(x)     _STE_GET_FLD((x), 5, S2HD)
-#define STE_S2HA(x)     _STE_GET_FLD((x), 5, S2HA)
-#define STE_S2S(x)      _STE_GET_FLD((x), 5, S2S)
-#define STE_S2R(x)      _STE_GET_FLD((x), 5, S2R)
+#define __STE_GET_FLD(x, idx, val) \
+	_STE_GET_FLD(x, idx, STE_##val##_SHIFT, STE_##val##BITS)
+
+#define STE_S1DSS(x)    _STE_GET_FLD((x), 2, 0, 2) /* 2 */
+#define STE_S1CIR(x)    _STE_GET_FLD((x), 2, 2, 2)
+#define STE_S1COR(x)    _STE_GET_FLD((x), 2, 4, 2)
+#define STE_S1CSH(x)    _STE_GET_FLD((x), 2, 6, 2)
+#define STE_CONT(x)     _STE_GET_FLD((x), 2, 13, 4)
+#define STE_PPAR(x)     _STE_GET_FLD((x), 2, 18, 1)
+#define STE_MEV(x)      _STE_GET_FLD((x), 2, 19, 1)
+#define STE_S1STALLD(x) _STE_GET_FLD((x), 2, 27, 1)
+#define STE_EATS(x)     _STE_GET_FLD((x), 2, 28, 2)
+#define STE_STRW(x)     _STE_GET_FLD((x), 2, 30, 2)
+#define STE_MEMATTR(x)  _STE_GET_FLD((x), 3, 0, 4) /* 3 */
+#define STE_MTCFG(x)    _STE_GET_FLD((x), 3, 4, 1)
+#define STE_ALLOCCFG(x) _STE_GET_FLD((x), 3, 5, 4)
+#define STE_SHCFG(x)    _STE_GET_FLD((x), 3, 12, 2)
+#define STE_NSCFG(x)    _STE_GET_FLD((x), 3, 14, 2)
+#define STE_PRIVCFG(x)  _STE_GET_FLD((x), 3, 16, 2)
+#define STE_INSTCFG(x)  _STE_GET_FLD((x), 3, 18, 2)
+#define STE_S2SL0(x)	_STE_GET_FLD((x), 5, 6, 2)
+#define STE_S2IR0(x)	_STE_GET_FLD((x), 5, 8, 2)
+#define STE_S2OR0(x)	_STE_GET_FLD((x), 5, 10, 2)
+#define STE_S2SH0(x)	_STE_GET_FLD((x), 5, 12, 2)
+#define STE_S2ENDIAN(x) _STE_GET_FLD((x), 5, 20, 1)
+#define STE_S2AFFD(x)   _STE_GET_FLD((x), 5, 21, 1)
+#define STE_S2PTW(x)    _STE_GET_FLD((x), 5, 22, 1)
+#define STE_S2HD(x)     _STE_GET_FLD((x), 5, 23, 1)
+#define STE_S2HA(x)     _STE_GET_FLD((x), 5, 24, 1)
+#define STE_S2S(x)      _STE_GET_FLD((x), 5, 25, 1)
+#define STE_S2R(x)      _STE_GET_FLD((x), 5, 26, 1)
 
 void dump_ste(ste_t *ste)
 {
@@ -114,14 +69,14 @@ void dump_ste(ste_t *ste)
     }
 
     pr_crit("***************STE**************\n"
-            "s1_ctx:%lx s1_fmt:%ld config:%ld valid:%ld\n"
-            "strw:%ld eats:%ld s1_stalld:%ld mev:%ld ppar:%ld cont:%ld"
-            "s1_cdmax:%ld s1_csh:%ld s1_cor:%ld s1_cir:%ld s1_dss:%ld\n"
-            "instcfg:%ld privcfg:%ld nscfg:%ld shcfg:%ld alloccfg:%ld"
-            "mtcft:%ld memattr:%ld\n s2vmid:%x\n"
-            "s2_s2r:%ld s2_s2s:%ld s2_ha:%ld s2_hd:%ld s2_ptw:%ld s2_affd:%ld\n"
-            "s2_endian:%ld s2_aa64:%ld s2_ps:%ld s2_tg:%ld s2_sh0:%ld s2_or0:%ld\n"
-            "s2_ir0:%ld s2_sl0:%ld s2t0sz:%ld\n"
+            "s1_ctx:%lx s1_fmt:%x config:%x valid:%x\n"
+            "strw:%x eats:%x s1_stalx:%x mev:%x ppar:%x cont:%x"
+            "s1_cdmax:%x s1_csh:%x s1_cor:%x s1_cir:%x s1_dss:%x\n"
+            "instcfg:%x privcfg:%x nscfg:%x shcfg:%x alloccfg:%x"
+            "mtcft:%x memattr:%x\n s2vmid:%x\n"
+            "s2_s2r:%x s2_s2s:%x s2_ha:%x s2_hd:%x s2_ptw:%x s2_affd:%x\n"
+            "s2_endian:%x s2_aa64:%x s2_ps:%x s2_tg:%x s2_sh0:%x s2_or0:%x\n"
+            "s2_ir0:%x s2_sl0:%x s2t0sz:%x\n"
             "s2_ttb:%lx\n"
             "***************STE**************\n",
             STE_CTXPTR(ste), STE_S1FMT(ste), STE_CONFIG(ste),
@@ -322,37 +277,37 @@ void dump_cmd(cmd_t *cmde)
         goto out;
     }
     tmpcnt = count;
-    count += flg.sec ? snprintf(&buf[count], len - count, "SEC:%lx ",
+    count += flg.sec ? snprintf(&buf[count], len - count, "SEC:%x ",
 				CMD_SEC(cmde)): 0;
-    count += flg.sev ? snprintf(&buf[count], len - count, "SEV=%lx ",
+    count += flg.sev ? snprintf(&buf[count], len - count, "SEV=%x ",
 				CMD_SEV(cmde)): 0;
-    count += flg.ab ? snprintf(&buf[count], len - count, "AB=%lx ",
+    count += flg.ab ? snprintf(&buf[count], len - count, "AB=%x ",
 			       CMD_AB(cmde)): 0;
-    count += flg.ac ? snprintf(&buf[count], len - count, "AC=%lx ",
+    count += flg.ac ? snprintf(&buf[count], len - count, "AC=%x ",
 			       CMD_AC(cmde)): 0;
-    count += flg.sec ? snprintf(&buf[count], len - count, "SSID:%lx ",
+    count += flg.sec ? snprintf(&buf[count], len - count, "SSID:%x ",
 				CMD_SSID(cmde)): 0;
     count += tmpcnt != count? snprintf(&buf[count], len - count, "\n"): 0;
     tmpcnt = count;
 
-    count += flg.vmid ? snprintf(&buf[count], len - count, "VMID=%lx ",
+    count += flg.vmid ? snprintf(&buf[count], len - count, "VMID=%x ",
 				 CMD_VMID(cmde)): 0;
-    count += flg.asid ? snprintf(&buf[count], len - count, "ASID=%lx ",
+    count += flg.asid ? snprintf(&buf[count], len - count, "ASID=%x ",
 				 CMD_ASID(cmde)): 0;
     count += flg.sid ? snprintf(&buf[count], len - count, "SID=%x ",
 				CMD_SID(cmde)): 0;
     count += tmpcnt != count? snprintf(&buf[count], len - count, "\n"): 0;
     tmpcnt = count;
 
-    count += flg.size ? snprintf(&buf[count], len - count, "SIZE=%lx ",
+    count += flg.size ? snprintf(&buf[count], len - count, "SIZE=%x ",
 				 CMD_SIZE(cmde)): 0;
-    count += flg.leaf ? snprintf(&buf[count], len - count, "LEAF=%lx ",
+    count += flg.leaf ? snprintf(&buf[count], len - count, "LEAF=%x ",
 				 CMD_LEAF(cmde)): 0;
-    count += flg.span ? snprintf(&buf[count], len - count, "SPAN=%lx ",
+    count += flg.span ? snprintf(&buf[count], len - count, "SPAN=%x ",
 				 CMD_SPAN(cmde)): 0;
     count += flg.addr ? snprintf(&buf[count], len - count, "ADDR=%lx ",
 				 CMD_ADDR(cmde)): 0;
-    count += snprintf(&buf[count], len - count, "GROUP:%lx RESP=%lx ",
+    count += snprintf(&buf[count], len - count, "GROUP:%x RESP=%x ",
                       CMD_GRPID(cmde), CMD_RESP(cmde));
     count += tmpcnt != count? snprintf(&buf[count], len - count, "\n"): 0;
     tmpcnt = count;
