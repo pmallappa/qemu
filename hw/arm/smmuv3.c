@@ -175,10 +175,9 @@ static void smmu_write64_reg(SMMUState *s, uint64_t reg, uint64_t val)
     *ptr = val;
 }
 
-static uint16_t smmu_find_sid(DeviceState *dev)
+static uint16_t smmu_get_sid(int busnum, int devfn)
 {
-    PCIDevice *pcidev = container_of(dev, PCIDevice, qdev);
-    return pci_get_arid(pcidev);
+    return  ((busnum & 0xff) << 8) | (devfn & 0x7);
 }
 
 /*
@@ -352,15 +351,30 @@ set_overflow:
  * pci_dma_read(write) only will call this function.
  */
 
+/*
+ * smmu_translate: this is called when device does a
+ * pci_dma_{read,write}() or similar
+ * Need to get the device's streamid which is equivalent of
+ * PCI RID/ARID
+ *
+ */
+typedef struct {
+    int           busnum;
+    int           devfn;
+    SMMUState    *smmu;
+    MemoryRegion  mr;
+    AddressSpace  as;
+} SMMUDevice;
+
 static IOMMUTLBEntry
-smmu_translate_dev(MemoryRegion *iommu, DeviceState *dev,
-                   hwaddr addr, bool is_write)
+smmu_translate(MemoryRegion *iommu, hwaddr addr, bool is_write)
 {
+    SMMUDevice *sdev = container_of(iommu, SMMUDevice, mr);
+    SMMUState *s = sdev->smmu;
     int error = 0;
     uint16_t sid = 0;
     ste_t ste;
     cd_t *cd;
-    SMMUState *s = container_of(iommu, SMMUState, iommu);
 
     IOMMUTLBEntry ret = {
         .target_as = &address_space_memory,
@@ -370,16 +384,15 @@ smmu_translate_dev(MemoryRegion *iommu, DeviceState *dev,
         .perm = IOMMU_NONE,
     };
 
+    SMMU_DPRINTF(INFO, "%s called for devfn:%d\n", __func__, sdev->devfn);
+
     /* We allow traffic through if SMMU is disabled */
     if (!smmu_enabled(s)) {
         SMMU_DPRINTF(CRIT, "SMMU Not enabled\n");
         goto bypass;
     }
 
-    if (dev == NULL) {
-        SMMU_DPRINTF(CRIT, "Device is NULL, dont know from where we got called\n");
-    } else
-        sid = smmu_find_sid(dev);
+    sid = smmu_get_sid(sdev->busnum, sdev->devfn);
 
     SMMU_DPRINTF(CRIT, "SID:%x\n", sid);
 
@@ -423,31 +436,30 @@ out:
     return ret;
 }
 
-/*
- * smmu_translate: this is called when device does a
- * pci_dma_{read,write}() or similar
- * Need to get the device's streamid which is equivalent of
- * PCI RID/ARID
- *
- */
-static IOMMUTLBEntry
-smmu_translate(MemoryRegion *iommu, hwaddr addr, bool is_write)
-{
-    SMMU_DPRINTF(INFO, "Dont know");
-    return smmu_translate_dev(iommu, NULL, addr, is_write);
-}
-
 static const MemoryRegionIOMMUOps smmu_ops = {
     .translate = smmu_translate,
-    .translate_dev = smmu_translate_dev,
 };
 
-
+/*
+ * TODO: We need to keep track of all allocated struct SMMUDevice
+ */
 static AddressSpace *smmu_pci_iommu(PCIBus *bus, void *opaque, int devfn)
 {
     SMMUState *s = opaque;
+    SMMUDevice *sdev;
+
     HERE();
-    return &s->iommu_as;
+
+    sdev = g_malloc0(sizeof(*sdev));
+
+    sdev->smmu = s;
+    sdev->busnum = pci_bus_num(bus);
+
+    memory_region_init_iommu(&sdev->mr, OBJECT(s),
+                             &smmu_ops, "arm_smmuv3", UINT64_MAX);
+    address_space_init(&sdev->as, &sdev->mr, "arm_smmuv3");
+
+    return &sdev->as;
 }
 
 static uint64_t smmu_read_mmio(void *opaque, hwaddr addr,
@@ -783,12 +795,13 @@ static int smmu_init(SysBusDevice *dev)
 
     for (i = 0; i < ARRAY_SIZE(s->irq); i++)
         sysbus_init_irq(dev, &s->irq[i]);
-
+#if 0
     /* Host Memory Access */
     memory_region_init_iommu(&s->iommu, OBJECT(sys), &smmu_ops,
                              "smmuv3", UINT64_MAX);
 
     address_space_init(&s->iommu_as, &s->iommu, "smmu-as");
+#endif
 
     if (pcibus)
         pci_setup_iommu(pcibus, smmu_pci_iommu, s);

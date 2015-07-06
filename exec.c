@@ -372,9 +372,9 @@ static inline bool memory_access_is_direct(MemoryRegion *mr, bool is_write)
 }
 
 /* Called from RCU critical section */
-static MemoryRegion *_address_space_translate(AddressSpace *as, DeviceState *dev,
-				      hwaddr addr, hwaddr *xlat, hwaddr *plen,
-                                      bool is_write)
+MemoryRegion *address_space_translate(AddressSpace *as, hwaddr addr,
+				 hwaddr *xlat, hwaddr *plen,
+                               	 bool is_write)
 {
     IOMMUTLBEntry iotlb;
     MemoryRegionSection *section;
@@ -389,10 +389,7 @@ static MemoryRegion *_address_space_translate(AddressSpace *as, DeviceState *dev
             break;
         }
 
-        if (mr->iommu_ops->translate_dev && dev)
-            iotlb = mr->iommu_ops->translate_dev(mr, dev, addr, is_write);
-        else
-            iotlb = mr->iommu_ops->translate(mr, addr, is_write);
+        iotlb = mr->iommu_ops->translate(mr, addr, is_write);
 
         addr = ((iotlb.translated_addr & ~iotlb.addr_mask)
                 | (addr & iotlb.addr_mask));
@@ -412,20 +409,6 @@ static MemoryRegion *_address_space_translate(AddressSpace *as, DeviceState *dev
 
     *xlat = addr;
     return mr;
-}
-
-MemoryRegion *address_space_translate_dev(AddressSpace *as, DeviceState *dev,
-					 hwaddr addr, hwaddr *xlat,
-					 hwaddr *plen, bool is_write)
-{
-    return _address_space_translate(as, dev, addr, xlat, plen, is_write);
-}
-
-MemoryRegion *address_space_translate(AddressSpace *as, hwaddr addr,
-                                      hwaddr *xlat, hwaddr *plen,
-                                      bool is_write)
-{
-    return _address_space_translate(as, NULL, addr, xlat, plen, is_write);
 }
 
 /* Called from RCU critical section */
@@ -2334,8 +2317,8 @@ static int memory_access_size(MemoryRegion *mr, unsigned l, hwaddr addr)
     return l;
 }
 
-static MemTxResult _address_space_rw(AddressSpace *as, DeviceState *dev, hwaddr addr,
-				     MemTxAttrs attrs, uint8_t *buf, int len, bool is_write)
+MemTxResult address_space_rw(AddressSpace *as, hwaddr addr,
+			    MemTxAttrs attrs, uint8_t *buf, int len, bool is_write)
 {
     hwaddr l;
     uint8_t *ptr;
@@ -2347,10 +2330,7 @@ static MemTxResult _address_space_rw(AddressSpace *as, DeviceState *dev, hwaddr 
     rcu_read_lock();
     while (len > 0) {
         l = len;
-	if (dev)
-            mr = address_space_translate_dev(as, dev, addr, &addr1, &l, is_write);
-	else
-            mr = address_space_translate(as, addr, &addr1, &l, is_write);
+        mr = address_space_translate(as, addr, &addr1, &l, is_write);
 
         if (is_write) {
             if (!memory_access_is_direct(mr, is_write)) {
@@ -2442,25 +2422,13 @@ static MemTxResult _address_space_rw(AddressSpace *as, DeviceState *dev, hwaddr 
 MemTxResult address_space_write(AddressSpace *as, hwaddr addr, MemTxAttrs attrs,
                                 const uint8_t *buf, int len)
 {
-    return _address_space_rw(as, NULL, addr, attrs, (uint8_t *)buf, len, true);
+    return address_space_rw(as, addr, attrs, (uint8_t *)buf, len, true);
 }
 
 MemTxResult address_space_read(AddressSpace *as, hwaddr addr, MemTxAttrs attrs,
                                uint8_t *buf, int len)
 {
-    return _address_space_rw(as, NULL, addr, attrs, buf, len, false);
-}
-
-MemTxResult address_space_rw(AddressSpace *as, hwaddr addr,
-				     MemTxAttrs attrs, uint8_t *buf, int len, bool is_write)
-{
-    return _address_space_rw(as, NULL, addr, attrs, (uint8_t *)buf, len, is_write);
-}
-
-MemTxResult address_space_rw_dev(AddressSpace *as, DeviceState *dev, hwaddr addr,
-				     MemTxAttrs attrs, uint8_t *buf, int len, bool is_write)
-{
-    return _address_space_rw(as, dev, addr, attrs, (uint8_t *)buf, len, is_write);
+    return address_space_rw(as, addr, attrs, buf, len, false);
 }
 
 void cpu_physical_memory_rw(hwaddr addr, uint8_t *buf,

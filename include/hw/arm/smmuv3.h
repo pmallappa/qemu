@@ -302,10 +302,10 @@ enum {
 #define EVT_CLS(x)	 __EVT_GET_FLD((x), 3, CLS)
 #define EVT_EFF_IND(x)	 __GET_FLD((x)->word[3], __SMMU_MASK(1), 12)
 #define EVT_EFF_RNW(x)	 __GET_FLD((x)->word[3], __SMMU_MASK(1), 13)
-#define EVT_INPUT_ADDR(x) ({                     \
+#define EVT_INPUT_ADDR(x) ({                               \
             uint64_t addr = (uint64_t)(x)->word[5] << 32;  \
-            addr |= (x)->word[4];                \
-            addr;                                \
+            addr |= (x)->word[4];                          \
+            addr;                                          \
         })
 #define EVT_ADDR_FETCH1(x) ({                                   \
             uint64_t addr = __GET_FLD((x)->word[5], 0xffff, 0);	\
@@ -350,9 +350,10 @@ enum {
     })
 #define CD_T0SZ(x)      _CD_GET_FLD((x), 0, 0, 6)
 #define CD_T1SZ(x)      _CD_GET_FLD((x), 0, 22, 6)
+#define CD_EPD0(x)      _CD_GET_FLD((x), 0, 14, 1)
 #define CD_TTB0(x)	CD_TTB((x), 0)
 #define CD_TTB1(x)	CD_TTB((x), 1)
-#define CD_EPD0(x)      _CD_GET_FLD((x), 0, 14, 1)
+
 #define CDM_VALID(x)    ((x)->word[0] & 0x1)
 
 /*
