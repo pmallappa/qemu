@@ -240,7 +240,7 @@ static int smmu_read_sysmem(SMMUState *s, hwaddr addr,
                             void *buf, dma_addr_t len)
 {
     return address_space_read(&address_space_memory,
-                              addr, MEMTXATTRS_UNSPECIFIED, buf, len);
+                              addr, buf, len);
 
 }
 
@@ -248,7 +248,7 @@ static int smmu_write_sysmem(SMMUState *s, hwaddr addr,
                             void *buf, dma_addr_t len)
 {
     return address_space_write(&address_space_memory,
-                               addr, MEMTXATTRS_UNSPECIFIED, buf, len);
+                               addr, buf, len);
 
 }
 
