@@ -240,7 +240,7 @@ static int smmu_read_sysmem(SMMUState *s, hwaddr addr,
                             void *buf, dma_addr_t len)
 {
     return address_space_read(&address_space_memory,
-                              addr, MEMTXATTRS_UNSPECIFIED, buf, len);
+                              addr, buf, len);
 
 }
 
@@ -248,7 +248,7 @@ static int smmu_write_sysmem(SMMUState *s, hwaddr addr,
                             void *buf, dma_addr_t len)
 {
     return address_space_write(&address_space_memory,
-                               addr, MEMTXATTRS_UNSPECIFIED, buf, len);
+                               addr, buf, len);
 
 }
 
@@ -366,15 +366,117 @@ typedef struct {
     AddressSpace  as;
 } SMMUDevice;
 
-static IOMMUTLBEntry
-smmu_translate(MemoryRegion *iommu, hwaddr addr, bool is_write)
+static int
+is_ste_valid_orig(SMMUState *s, ste_t *ste)
+{
+    uint32_t _config = STE_CONFIG(ste) & 0x7,
+        idr0 = s->regs[SMMU_REG_IDR0],
+        idr5 = s->regs[SMMU_REG_IDR5];
+
+    uint32_t httu = extract32(idr0, 6, 2);
+    bool config[] = {_config & 0x1,
+                     _config & 0x2,
+                     _config & 0x3};
+    bool granule_supported = (1 << STE_S2TG(ste)) & (idr5 >> 4);
+
+    bool s1p = idr0 & SMMU_IDR0_S1P,
+        s2p = idr0 & SMMU_IDR0_S2P,
+        hyp = idr0 & SMMU_IDR0_HYP,
+        cd2l = idr0 & SMMU_IDR0_CD2L,
+        idr0_vmid = idr0 & SMMU_IDR0_VMID16,
+        ats = idr0 & SMMU_IDR0_ATS;
+
+    int ssidsz = (s->regs[SMMU_REG_IDR1] >> 6) & 0x1f;
+
+    uint32_t ste_vmid = STE_S2VMID(ste),
+        ste_eats = STE_EATS(ste),
+        ste_s2s = STE_S2S(ste),
+        ste_s1cdmax = STE_S1CDMAX(ste);
+
+    uint64_t oas, max_pa;
+    bool strw_ign;
+    bool addr_out_of_range;
+
+    if (!STE_VALID(ste))
+        return false;
+
+    if (config[2] == 0 &&
+        (
+         (!s1p && config[0]) ||
+         (!s2p && config[1]) ||
+         (s2p && config[1]) ||
+         (!ssidsize && ste_s1cdmax && config[0] && !cd2l &&
+          (
+           (ste_s1fmt == 1 || ste_s1fmt == 2))) &&  ||
+         (ats && !(_config & 0x3) &&
+          (
+           (ste_eats == 2) && (_config != 0x7) ||
+           (ste_eats == 1 && !ste_s2s)
+           )) ||
+         (config[0] && (ssidsz && (ste_s1cdmax > ssidsz)))))
+        return false;
+
+    oas = min(STE_S2PS(ste), idr5 & 0x7);
+
+    switch(oas) {
+    case 3: max_pa = ~(1 << 42); break;
+    default: max_pa = ~(1 << (32 + (oas * 4))); break;
+    }
+
+    strw_ign =  = !s1p || !hyp || (config == 4));
+
+    addr_out_of_range = (max_pa - STE_S2TTB(ste)) < 0;
+
+    if (config[1] &&
+        (
+         (aa64 && !granule_supported) ||
+         addr_out_of_range ||
+         (!aa64 && !ttf0) ||
+         (aa64 && ttf1)  ||
+         ((STE_S2HA(ste) || STE_S2HD(ste) && !aa64)) ||
+         ((STE_S2HA(ste) || STE_S2HD(ste)) && !httu) ||
+         (STE.S2HD(ste) && (httu == 1))))
+        return false;
+
+        if (s2p && (!(_config == 4) &&
+            (strw_ign || !ste_strw) && !idr0_vmid && !(ste_vmid>>8))
+        return false;
+
+    return true;
+}
+
+/*
+ * This should look similar to that given in the SMMU spec 0.11
+ * assumption:
+ *      - We only support S1-Only or S2-Only translation for now
+ */
+static int
+is_cd_valid(SMMUState *s, ste_t *ste, cd_t *cd)
+{
+    return CD_VALID(cd);
+}
+
+static int
+is_ste_valid(SMMUState *s, ste_t *ste)
+{ /* TODO: We should probably stick to simple case */
+    return STE_VALID(ste);
+    return is_ste_valid_orig(s, ste);
+}
+
+/*
+ * TR - Translation Request
+ * TT - Translated Tansaction
+ * OT - Other Transaction
+ */
+static int
+smmu_translate(IOMMUTLBEntry *tlb, hwaddr addr, bool is_write)
 {
     SMMUDevice *sdev = container_of(iommu, SMMUDevice, mr);
     SMMUState *s = sdev->smmu;
-    int error = 0;
-    uint16_t sid = 0;
+    uint16_t sid = 0, config;
     ste_t ste;
     cd_t *cd;
+    hwaddr ipa, pa;
 
     IOMMUTLBEntry ret = {
         .target_as = &address_space_memory,
@@ -384,42 +486,63 @@ smmu_translate(MemoryRegion *iommu, hwaddr addr, bool is_write)
         .perm = IOMMU_NONE,
     };
 
-    SMMU_DPRINTF(INFO, "%s called for devfn:%d\n", __func__, sdev->devfn);
-
+    /* SMMU Bypass */
+    SMMU_DPRINTF(INFO, "1. SMMU Bypass check...\n");
     /* We allow traffic through if SMMU is disabled */
     if (!smmu_enabled(s)) {
-        SMMU_DPRINTF(CRIT, "SMMU Not enabled\n");
+        SMMU_DPRINTF(CRIT, "SMMU Not enabled.. bypassing addr:%lx\n", addr);
         goto bypass;
     }
 
     sid = smmu_get_sid(sdev->busnum, sdev->devfn);
-
     SMMU_DPRINTF(CRIT, "SID:%x\n", sid);
+    SMMU_DPRINTF(INFO, "DONE (1)\n");
 
+    /* Fetch & Check STE */
     error = smmu_find_ste(s, sid, &ste);
     if (error) goto error_out;  /* F_STE_FETCH or F_CFG_CONFLICT */
 
-    if (!STE_VALID(&ste)) {
+    if (!is_ste_valid(s, &ste)) {
         error = SMMU_EVT_C_BAD_STE;
         goto error_out;
     }
+    SMMU_DPRINTF(INFO, "Valid STE Found\n");
 
-    switch(STE_CONFIG(&ste)) {
-    case STE_CONFIG_S1BY_S2BY:
+    /* Stream Bypass */
+    config = STE_CONFIG(&ste);
+    /*
+     * Mostly we have S1-Translate and S2-Bypass, Others will be
+     * implemented as we go
+     */
+    switch (config) {
+    case STE_CONFIG_S1BY_S2BY:  /* S1-bypass, S2-bypass */
         goto bypass;
-    case STE_CONFIG_S1TR_S2BY:
+
+    case STE_CONFIG_S1TR_S2TR:  /* S1-trans, S2-trans, assume S1-Only */
+        SMMU_DPRINTF(CRIT, "S1+S2 translation, not supported\n");
+        break;
+    case STE_CONFIG_S1TR_S2BY:        /* S1-Trans, S2-bypass */
         cd = smmu_get_cd(s, &ste, 0); /* We dont have SSID, so 0 */
-        cd = cd;
+        if (!is_cd_valid(s, &ste, &cd)) {
+            error = SMMU_EVT_C_BAD_CD;
+            goto error_out;
+        }
         break;
     case STE_CONFIG_S1BY_S2TR:
-    case STE_CONFIG_S1TR_S2TR:
-    default:
-        SMMU_DPRINTF(CRIT, "Unsupported STE Configuration\n");
+        SMMU_DPRINTF(CRIT, "S2-only translation, not supported right now\n");
         goto out;
         break;
+    default:
+        SMMU_DPRINTF(CRIT, "Unknown config field in STE\n");
+        goto out;
     }
+    SMMU_DPRINTF(INFO, "DONE (3)\n");
 
-    error = smmu_walk_pgtable(s, &ste, cd, &ret, is_write);
+    /* Walk Stage1, if S2 is enabled, S2 walked for Every access on S1 */
+
+    SMMU_DPRINTF(INFO, "DONE (1)\n");
+
+    /* Walk Stage2 */
 
 error_out:
     if (error) {        /* Post the Error using Event Q */
@@ -433,7 +556,7 @@ bypass:
     ret.perm = is_write ? IOMMU_WO: IOMMU_RO;
 
 out:
-    return ret;
+    return 0;
 }
 
 static const MemoryRegionIOMMUOps smmu_ops = {
@@ -463,7 +586,7 @@ static AddressSpace *smmu_pci_iommu(PCIBus *bus, void *opaque, int devfn)
 }
 
 static uint64_t smmu_read_mmio(void *opaque, hwaddr addr,
-                              unsigned size)
+                               unsigned size)
 {
     SMMUState *s = opaque;
     uint64_t val;
@@ -703,7 +826,7 @@ static const MemoryRegionOps smmu_mem_ops = {
     .endianness = DEVICE_LITTLE_ENDIAN,
     .valid = {
         .min_access_size = 4,
-        .max_access_size = 4,
+        .max_access_size = 8,
     },
 };
 
