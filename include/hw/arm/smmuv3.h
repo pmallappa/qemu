@@ -87,6 +87,14 @@ enum {
     SMMU_SECURE_OFFSET       = 0x8000,
 };
 
+#define SMMU_IDR0_S2P            (1 << 0)
+#define SMMU_IDR0_S1P            (1 << 1)
+#define SMMU_IDR0_HTTU           (0x3 << 6)
+#define SMMU_IDR0_HYP            (1 << 9)
+#define SMMU_IDR0_VMID16         (1 << 18)
+#define SMMU_IDR0_CD2L           (1 << 19)
+
+
 /* IRQ Bits */
 #define SMMU_IRQ_CTRL_GERROR_EN (1 << 0)
 #define SMMU_IRQ_CTRL_EVENT_EN  (1 << 1)
@@ -199,7 +207,7 @@ enum {
  *****************************/
 #define EVT_Q_OVERFLOW        (1<<31)
 enum {
-    SMMU_EVT_F_UUT		= 0x1,
+    SMMU_EVT_F_UUT	    = 0x1,
     SMMU_EVT_C_BAD_SID,
     SMMU_EVT_F_STE_FETCH,
     SMMU_EVT_C_BAD_STE,
@@ -210,13 +218,13 @@ enum {
     SMMU_EVT_F_CD_FETCH,
     SMMU_EVT_C_BAD_CD,
     SMMU_EVT_F_WALK_EXT_ABRT,
-    SMMU_EVT_F_TRANS	= 0x10,
+    SMMU_EVT_F_TRANS        = 0x10,
     SMMU_EVT_F_ADDR_SZ,
     SMMU_EVT_F_ACCESS,
     SMMU_EVT_F_PERM,
     SMMU_EVT_F_TLB_CONFLICT = 0x20,
     SMMU_EVT_F_CFG_CONFLICT = 0x21,
-    SMMU_EVT_E_PAGE_REQ	= 0x24,
+    SMMU_EVT_E_PAGE_REQ     = 0x24,
 };
 
 #define EVT_EVT_BITS	8
@@ -336,21 +344,21 @@ enum {
 /*
  * Bits for Context Descriptor
  */
-#define _CD_GET_FLD(x, idx, start, len)        \
+#define _CD_FIELD(x, idx, start, len)        \
     extract32((x)->word[(idx)], start, len)
 
-#define CD_VALID(x)   _CD_GET_FLD((x), 0, 31, 1)
-#define CD_ASID(x)    _CD_GET_FLD((x), 1, 16, 16)
+#define CD_VALID(x)   _CD_FIELD((x), 0, 31, 1)
+#define CD_ASID(x)    _CD_FIELD((x), 1, 16, 16)
 #define CD_TTB(x, sel)                                                  \
     ({                                                                  \
-        uint64_t addr = _CD_GET_FLD((x), (sel)*2 + 2, 0, 16);           \
+        uint64_t addr = _CD_FIELD((x), (sel)*2 + 2, 0, 16);           \
         addr <<= 32;                                                    \
-        addr |= (uint64_t)_CD_GET_FLD((x), (sel)*2 + 3, 4, 28);         \
+        addr |= (uint64_t)_CD_FIELD((x), (sel)*2 + 3, 4, 28);         \
         addr;                                                           \
     })
-#define CD_T0SZ(x)      _CD_GET_FLD((x), 0, 0, 6)
-#define CD_T1SZ(x)      _CD_GET_FLD((x), 0, 22, 6)
-#define CD_EPD0(x)      _CD_GET_FLD((x), 0, 14, 1)
+#define CD_T0SZ(x)      _CD_FIELD((x), 0, 0, 6)
+#define CD_T1SZ(x)      _CD_FIELD((x), 0, 22, 6)
+#define CD_EPD0(x)      _CD_FIELD((x), 0, 14, 1)
 #define CD_TTB0(x)	CD_TTB((x), 0)
 #define CD_TTB1(x)	CD_TTB((x), 1)
 
@@ -382,31 +390,32 @@ enum {
     STE_S1DSS_RESERVED,
 };
 
-#define _STE_GET_FLD(x, idx, start, len)       \
+#define _STE_FIELD(x, idx, start, len)       \
     extract32((x)->word[(idx)], start, len)
 
-#define STE_VALID(x)     _STE_GET_FLD((x), 0, 0, 1) /* 0 */
-#define STE_CONFIG(x)    _STE_GET_FLD((x), 0, 1, 3)
-#define STE_S1FMT(x)     _STE_GET_FLD((x), 0, 4, 2)
-#define STE_S1CDMAX(x)   _STE_GET_FLD((x), 2, 8, 2)
-#define STE_S2VMID(x)    _STE_GET_FLD((x), 4, 0, 16) /* 4 */
-#define STE_S2T0SZ(x)    _STE_GET_FLD((x), 5, 0, 6)  /* 5 */
-#define STE_S2TG(x)      _STE_GET_FLD((x), 5, 14, 2)
-#define STE_S2PS(x)      _STE_GET_FLD((x), 5, 16, 3)
-#define STE_S2AA64(x)    _STE_GET_FLD((x), 5, 19, 1)
+#define STE_VALID(x)     _STE_FIELD((x), 0, 0, 1) /* 0 */
+#define STE_CONFIG(x)    _STE_FIELD((x), 0, 1, 3)
+#define STE_S1FMT(x)     _STE_FIELD((x), 0, 4, 2)
+#define STE_S1CDMAX(x)   _STE_FIELD((x), 1, 8, 2)
+#define STE_EATS(x)      _STE_FIELD((x), 2, 28, 2)
+#define STE_S2VMID(x)    _STE_FIELD((x), 4, 0, 16) /* 4 */
+#define STE_S2T0SZ(x)    _STE_FIELD((x), 5, 0, 6)  /* 5 */
+#define STE_S2TG(x)      _STE_FIELD((x), 5, 14, 2)
+#define STE_S2PS(x)      _STE_FIELD((x), 5, 16, 3)
+#define STE_S2AA64(x)    _STE_FIELD((x), 5, 19, 1)
 #define STE_CTXPTR(x)                                           \
     ({								\
         unsigned long addr;					\
-        addr = (uint64_t)_STE_GET_FLD((x), 1, 0, 16) << 32;	\
-        addr |= (uint64_t)_STE_GET_FLD((x), 0, 4, 28);          \
+        addr = (uint64_t)_STE_FIELD((x), 1, 0, 16) << 32;	\
+        addr |= (uint64_t)_STE_FIELD((x), 0, 4, 28);          \
         addr;							\
     })
 
 #define STE_S2TTB(x)                                            \
     ({								\
         unsigned long addr;					\
-        addr = (uint64_t)_STE_GET_FLD((x), 7, 0, 16) << 32;	\
-        addr |= (uint64_t)_STE_GET_FLD((x), 6, 4, 28);          \
+        addr = (uint64_t)_STE_FIELD((x), 7, 0, 16) << 32;	\
+        addr |= (uint64_t)_STE_FIELD((x), 6, 4, 28);          \
         addr;							\
     })
 
