@@ -925,10 +925,9 @@ static void machvirt_init(MachineState *machine)
 
     create_rtc(vbi, pic);
 
-    create_smmu(vbi, pic);
-    create_pcie(vbi, pic);
+    create_smmu(vbi, pic);      /* Has to be before create_pcie */
 
-    create_smmu(vbi, pic);
+    create_pcie(vbi, pic);
 
     /* Create mmio transports, so the user can create virtio backends
      * (which will be automatically plugged in to the transports). If

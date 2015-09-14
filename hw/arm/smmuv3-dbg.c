@@ -26,39 +26,31 @@
     } while(0)
 
 
-#define __STE_GET_FLD(x, idx, val) \
-	_STE_GET_FLD(x, idx, STE_##val##_SHIFT, STE_##val##BITS)
+#define STE_S1DSS(x)    _STE_FIELD((x), 2, 0, 2) /* 2 */
+#define STE_S1CIR(x)    _STE_FIELD((x), 2, 2, 2)
+#define STE_S1COR(x)    _STE_FIELD((x), 2, 4, 2)
+#define STE_S1CSH(x)    _STE_FIELD((x), 2, 6, 2)
+#define STE_CONT(x)     _STE_FIELD((x), 2, 13, 4)
+#define STE_PPAR(x)     _STE_FIELD((x), 2, 18, 1)
+#define STE_MEV(x)      _STE_FIELD((x), 2, 19, 1)
+#define STE_S1STALLD(x) _STE_FIELD((x), 2, 27, 1)
+#define STE_MEMATTR(x)  _STE_FIELD((x), 3, 0, 4) /* 3 */
+#define STE_MTCFG(x)    _STE_FIELD((x), 3, 4, 1)
+#define STE_ALLOCCFG(x) _STE_FIELD((x), 3, 5, 4)
+#define STE_SHCFG(x)    _STE_FIELD((x), 3, 12, 2)
+#define STE_NSCFG(x)    _STE_FIELD((x), 3, 14, 2)
+#define STE_PRIVCFG(x)  _STE_FIELD((x), 3, 16, 2)
+#define STE_INSTCFG(x)  _STE_FIELD((x), 3, 18, 2)
+#define STE_S2SL0(x)	_STE_FIELD((x), 5, 6, 2)
+#define STE_S2IR0(x)	_STE_FIELD((x), 5, 8, 2)
+#define STE_S2OR0(x)	_STE_FIELD((x), 5, 10, 2)
+#define STE_S2SH0(x)	_STE_FIELD((x), 5, 12, 2)
+#define STE_S2ENDIAN(x) _STE_FIELD((x), 5, 20, 1)
+#define STE_S2AFFD(x)   _STE_FIELD((x), 5, 21, 1)
+#define STE_S2PTW(x)    _STE_FIELD((x), 5, 22, 1)
+#define STE_S2R(x)      _STE_FIELD((x), 5, 26, 1)
 
-#define STE_S1DSS(x)    _STE_GET_FLD((x), 2, 0, 2) /* 2 */
-#define STE_S1CIR(x)    _STE_GET_FLD((x), 2, 2, 2)
-#define STE_S1COR(x)    _STE_GET_FLD((x), 2, 4, 2)
-#define STE_S1CSH(x)    _STE_GET_FLD((x), 2, 6, 2)
-#define STE_CONT(x)     _STE_GET_FLD((x), 2, 13, 4)
-#define STE_PPAR(x)     _STE_GET_FLD((x), 2, 18, 1)
-#define STE_MEV(x)      _STE_GET_FLD((x), 2, 19, 1)
-#define STE_S1STALLD(x) _STE_GET_FLD((x), 2, 27, 1)
-#define STE_EATS(x)     _STE_GET_FLD((x), 2, 28, 2)
-#define STE_STRW(x)     _STE_GET_FLD((x), 2, 30, 2)
-#define STE_MEMATTR(x)  _STE_GET_FLD((x), 3, 0, 4) /* 3 */
-#define STE_MTCFG(x)    _STE_GET_FLD((x), 3, 4, 1)
-#define STE_ALLOCCFG(x) _STE_GET_FLD((x), 3, 5, 4)
-#define STE_SHCFG(x)    _STE_GET_FLD((x), 3, 12, 2)
-#define STE_NSCFG(x)    _STE_GET_FLD((x), 3, 14, 2)
-#define STE_PRIVCFG(x)  _STE_GET_FLD((x), 3, 16, 2)
-#define STE_INSTCFG(x)  _STE_GET_FLD((x), 3, 18, 2)
-#define STE_S2SL0(x)	_STE_GET_FLD((x), 5, 6, 2)
-#define STE_S2IR0(x)	_STE_GET_FLD((x), 5, 8, 2)
-#define STE_S2OR0(x)	_STE_GET_FLD((x), 5, 10, 2)
-#define STE_S2SH0(x)	_STE_GET_FLD((x), 5, 12, 2)
-#define STE_S2ENDIAN(x) _STE_GET_FLD((x), 5, 20, 1)
-#define STE_S2AFFD(x)   _STE_GET_FLD((x), 5, 21, 1)
-#define STE_S2PTW(x)    _STE_GET_FLD((x), 5, 22, 1)
-#define STE_S2HD(x)     _STE_GET_FLD((x), 5, 23, 1)
-#define STE_S2HA(x)     _STE_GET_FLD((x), 5, 24, 1)
-#define STE_S2S(x)      _STE_GET_FLD((x), 5, 25, 1)
-#define STE_S2R(x)      _STE_GET_FLD((x), 5, 26, 1)
-
-void dump_ste(ste_t *ste)
+void dump_ste(Ste *ste)
 {
     int i;
 
@@ -102,19 +94,19 @@ static const char *__cmd_str_arr[] = {
     [ SMMU_CMD_CFGI_STE_RANGE ]  = "CMD_CFGI_STE_RANGE",
     [ SMMU_CMD_CFGI_CD ]         = "CMD_CFGI_CD",
     [ SMMU_CMD_CFGI_CD_ALL ]     = "CMD_CFGI_CD_ALL",
-    [ SMMU_CMD_TLBI_NH_ALL ]     = "CMD_TLBI_NH_ALL",
-    [ SMMU_CMD_TLBI_NH_ASID ]    = "CMD_TLBI_NH_ASID",
-    [ SMMU_CMD_TLBI_NH_VA ]      = "CMD_TLBI_NH_VA",
-    [ SMMU_CMD_TLBI_NH_VAA ]     = "CMD_TLBI_NH_VAA",
-    [ SMMU_CMD_TLBI_EL3_ALL ]    = "CMD_TLBI_EL3_ALL",
-    [ SMMU_CMD_TLBI_EL3_VA ]     = "CMD_TLBI_EL3_VA",
-    [ SMMU_CMD_TLBI_EL2_ALL ]    = "CMD_TLBI_EL2_ALL",
-    [ SMMU_CMD_TLBI_EL2_ASID ]   = "CMD_TLBI_EL2_ASID",
-    [ SMMU_CMD_TLBI_EL2_VA ]     = "CMD_TLBI_EL2_VA",
-    [ SMMU_CMD_TLBI_EL2_VAA ]    = "CMD_TLBI_EL2_VAA",
-    [ SMMU_CMD_TLBI_S12_VMALL ]  = "CMD_TLBI_S12_VMALL",
-    [ SMMU_CMD_TLBI_S2_IPA ]     = "CMD_TLBI_S2_IPA",
-    [ SMMU_CMD_TLBI_NSNH_ALL ]   = "CMD_TLBI_NSNH_ALL",
+    [ SMMU_CMD_TLBI_NH_ALL ]     = "CDDESCLBI_NH_ALL",
+    [ SMMU_CMD_TLBI_NH_ASID ]    = "CDDESCLBI_NH_ASID",
+    [ SMMU_CMD_TLBI_NH_VA ]      = "CDDESCLBI_NH_VA",
+    [ SMMU_CMD_TLBI_NH_VAA ]     = "CDDESCLBI_NH_VAA",
+    [ SMMU_CMD_TLBI_EL3_ALL ]    = "CDDESCLBI_EL3_ALL",
+    [ SMMU_CMD_TLBI_EL3_VA ]     = "CDDESCLBI_EL3_VA",
+    [ SMMU_CMD_TLBI_EL2_ALL ]    = "CDDESCLBI_EL2_ALL",
+    [ SMMU_CMD_TLBI_EL2_ASID ]   = "CDDESCLBI_EL2_ASID",
+    [ SMMU_CMD_TLBI_EL2_VA ]     = "CDDESCLBI_EL2_VA",
+    [ SMMU_CMD_TLBI_EL2_VAA ]    = "CDDESCLBI_EL2_VAA",
+    [ SMMU_CMD_TLBI_S12_VMALL ]  = "CDDESCLBI_S12_VMALL",
+    [ SMMU_CMD_TLBI_S2_IPA ]     = "CDDESCLBI_S2_IPA",
+    [ SMMU_CMD_TLBI_NSNH_ALL ]   = "CDDESCLBI_NSNH_ALL",
     [ SMMU_CMD_ATC_INV ]         = "CMD_ATC_INV",
     [ SMMU_CMD_PRI_RESP ]        = "CMD_PRI_RESP",
     [ SMMU_CMD_RESUME ]          = "CMD_RESUME",
@@ -144,7 +136,7 @@ static const char *__evt_str_arr[] = {
     [SMMU_EVT_E_PAGE_REQ]        = "SMMU_EVT_E_PAGE_REQ",
 };
 
-void dump_evt(evt_t *evt)
+void dump_evt(Evt *evt)
 {
     int i;
 
@@ -237,7 +229,7 @@ static int __smmu_build_cmd_fields(uint8_t cmd, struct cmd_flags *f)
     return 0;
 }
 
-void dump_cmd(cmd_t *cmde)
+void dump_cmd(Cmd *cmde)
 {
     /* Considering 100 chars per line, 4 lines */
     char buf[512];

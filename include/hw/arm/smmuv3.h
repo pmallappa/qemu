@@ -89,8 +89,10 @@ enum {
 
 #define SMMU_IDR0_S2P            (1 << 0)
 #define SMMU_IDR0_S1P            (1 << 1)
+#define SMMU_IDR0_TTF            (0x3 << 2)
 #define SMMU_IDR0_HTTU           (0x3 << 6)
 #define SMMU_IDR0_HYP            (1 << 9)
+#define SMMU_IDR0_ATS            (1 << 10)
 #define SMMU_IDR0_VMID16         (1 << 18)
 #define SMMU_IDR0_CD2L           (1 << 19)
 
@@ -398,16 +400,20 @@ enum {
 #define STE_S1FMT(x)     _STE_FIELD((x), 0, 4, 2)
 #define STE_S1CDMAX(x)   _STE_FIELD((x), 1, 8, 2)
 #define STE_EATS(x)      _STE_FIELD((x), 2, 28, 2)
+#define STE_STRW(x)      _STE_FIELD((x), 2, 30, 2)
 #define STE_S2VMID(x)    _STE_FIELD((x), 4, 0, 16) /* 4 */
 #define STE_S2T0SZ(x)    _STE_FIELD((x), 5, 0, 6)  /* 5 */
 #define STE_S2TG(x)      _STE_FIELD((x), 5, 14, 2)
 #define STE_S2PS(x)      _STE_FIELD((x), 5, 16, 3)
 #define STE_S2AA64(x)    _STE_FIELD((x), 5, 19, 1)
+#define STE_S2HD(x)      _STE_FIELD((x), 5, 24, 1)
+#define STE_S2HA(x)      _STE_FIELD((x), 5, 25, 1)
+#define STE_S2S(x)       _STE_FIELD((x), 5, 26, 1)
 #define STE_CTXPTR(x)                                           \
     ({								\
         unsigned long addr;					\
         addr = (uint64_t)_STE_FIELD((x), 1, 0, 16) << 32;	\
-        addr |= (uint64_t)_STE_FIELD((x), 0, 4, 28);          \
+        addr |= (uint64_t)_STE_FIELD((x), 0, 4, 28);            \
         addr;							\
     })
 
@@ -431,21 +437,25 @@ struct __smmu_data8 {
     uint32_t word[8];
 };
 
+struct __smmu_data16 {
+    uint32_t word[16];
+};
+
 struct __smmu_data4 {
     uint32_t word[4];
 };
 
-typedef struct __smmu_data2	stm_t; /* STE Level 1 Descriptor */
-typedef struct __smmu_data8	ste_t; /* Stream Table Entry(STE) */
-typedef struct __smmu_data2	cdm_t; /* CD Level 1 Descriptor */
-typedef struct __smmu_data8	cd_t;  /* Context Descriptor(CD) */
+typedef struct __smmu_data2	STEDesc; /* STE Level 1 Descriptor */
+typedef struct __smmu_data16	Ste;     /* Stream Table Entry(STE) */
+typedef struct __smmu_data2	CDDesc;  /* CD Level 1 Descriptor */
+typedef struct __smmu_data16	Cd;      /* Context Descriptor(CD) */
 
-typedef struct __smmu_data4	cmd_t; /* Command Entry */
-typedef struct __smmu_data8	evt_t; /* Event Entry */
-typedef struct __smmu_data4	pri_t; /* PRI entry */
+typedef struct __smmu_data4	Cmd; /* Command Entry */
+typedef struct __smmu_data8	Evt; /* Event Entry */
+typedef struct __smmu_data4	Pri; /* PRI entry */
 
-void dump_cmd(cmd_t *);
-void dump_ste(ste_t *);
-void dump_evt(evt_t *);
+void dump_cmd(Cmd *);
+void dump_ste(Ste *);
+void dump_evt(Evt *);
 
 #endif
