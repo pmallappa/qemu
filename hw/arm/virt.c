@@ -71,6 +71,7 @@ typedef struct VirtBoardInfo {
     uint32_t clock_phandle;
     uint32_t gic_phandle;
     uint32_t v2m_phandle;
+    const char *class_name;
 } VirtBoardInfo;
 
 typedef struct {
@@ -85,6 +86,7 @@ typedef struct {
     int32_t gic_version;
 } VirtMachineState;
 
+#define TYPE_VIRT_MACHINE   MACHINE_TYPE_NAME("virt-v3")
 #define TYPE_VIRT_MACHINE   MACHINE_TYPE_NAME("virt")
 #define VIRT_MACHINE(obj) \
     OBJECT_CHECK(VirtMachineState, (obj), TYPE_VIRT_MACHINE)
@@ -111,6 +113,7 @@ static const MemMapEntry a15memmap[] = {
     [VIRT_CPUPERIPHS] =         { 0x08000000, 0x00020000 },
     /* GIC distributor and CPU interfaces sit inside the CPU peripheral space */
     [VIRT_GIC_DIST] =           { 0x08000000, 0x00010000 },
+    /* Note on GICv3 VIRT_GIC_DIST_SPI takes place of VIRT_GIC_CPU */
     [VIRT_GIC_CPU] =            { 0x08010000, 0x00010000 },
     [VIRT_GIC_V2M] =            { 0x08020000, 0x00001000 },
     /* The space in between here is reserved for GICv3 CPU/vCPU/HYP */
@@ -145,21 +148,25 @@ static VirtBoardInfo machines[] = {
         .cpu_model = "cortex-a15",
         .memmap = a15memmap,
         .irqmap = a15irqmap,
+        .class_name = TYPE_ARM_CPU,
     },
     {
         .cpu_model = "cortex-a53",
         .memmap = a15memmap,
         .irqmap = a15irqmap,
+        .class_name = TYPE_AARCH64_CPU,
     },
     {
         .cpu_model = "cortex-a57",
         .memmap = a15memmap,
         .irqmap = a15irqmap,
+        .class_name = TYPE_AARCH64_CPU,
     },
     {
         .cpu_model = "host",
         .memmap = a15memmap,
         .irqmap = a15irqmap,
+        .class_name = TYPE_ARM_CPU,
     },
 };
 
@@ -274,6 +281,12 @@ static void fdt_add_timer_nodes(const VirtBoardInfo *vbi, int gictype)
         irqflags = deposit32(irqflags, GIC_FDT_IRQ_PPI_CPU_START,
                              GIC_FDT_IRQ_PPI_CPU_WIDTH,
                              (1 << vbi->smp_cpus) - 1);
+    } else if (gictype == 3) {
+        uint32_t max;
+        /* Argument is 32 bit but 8 bits are reserved for flags */
+        max = (vbi->smp_cpus >= 24) ? 24 : vbi->smp_cpus;
+        irqflags = deposit32(irqflags, GIC_FDT_IRQ_PPI_CPU_START,
+                             GICV3_FDT_IRQ_PPI_CPU_WIDTH, (1 << max) - 1);
     }
 
     qemu_fdt_add_subnode(vbi->fdt, "/timer");
@@ -434,7 +447,12 @@ static void create_gic(VirtBoardInfo *vbi, qemu_irq *pic, int type, bool secure)
      */
     qdev_prop_set_uint32(gicdev, "num-irq", NUM_IRQS + 32);
     if (!kvm_irqchip_in_kernel()) {
-        qdev_prop_set_bit(gicdev, "has-security-extensions", secure);
+        if (type == 3) {
+            /* AARCH64 has 4 security levels */
+            qdev_prop_set_uint8(gicdev, "security-levels", secure ? 1 : 0);
+        } else {
+            qdev_prop_set_bit(gicdev, "has-security-extensions", secure);
+        }
     }
     qdev_init_nofail(gicdev);
     gicbusdev = SYS_BUS_DEVICE(gicdev);
@@ -443,6 +461,14 @@ static void create_gic(VirtBoardInfo *vbi, qemu_irq *pic, int type, bool secure)
         sysbus_mmio_map(gicbusdev, 1, vbi->memmap[VIRT_GIC_REDIST].base);
     } else {
         sysbus_mmio_map(gicbusdev, 1, vbi->memmap[VIRT_GIC_CPU].base);
+    }
+
+    if (type == 3) {
+        /* Connect GIC to CPU */
+        for (i = 0; i < smp_cpus; i++) {
+            CPUState *cpu = qemu_get_cpu(i);
+            aatch64_registers_with_opaque_set(OBJECT(cpu), (void *)gicdev);
+        }
     }
 
     /* Wire the outputs from each CPU's generic timer to the
@@ -967,7 +993,7 @@ static void machvirt_init(MachineState *machine)
     create_fdt(vbi);
 
     for (n = 0; n < smp_cpus; n++) {
-        ObjectClass *oc = cpu_class_by_name(TYPE_ARM_CPU, cpustr[0]);
+        ObjectClass *oc = cpu_class_by_name(vbi->class_name, cpustr[0]);
         CPUClass *cc = CPU_CLASS(oc);
         Object *cpuobj;
         Error *err = NULL;
@@ -1141,12 +1167,18 @@ static void virt_instance_init(Object *obj)
                                     "physical address space above 32 bits",
                                     NULL);
     /* Default GIC type is v2 */
-    vms->gic_version = 2;
+    vms->gic_version = version;
     object_property_add_str(obj, "gic-version", virt_get_gic_version,
                         virt_set_gic_version, NULL);
     object_property_set_description(obj, "gic-version",
                                     "Set GIC version. "
                                     "Valid values are 2, 3 and host", NULL);
+}
+
+static void virt_instance_init(Object *obj)
+{
+    /* Default GIC type is v2 */
+    virt_instance_init_common(obj, 2);
 }
 
 static void virt_class_init(ObjectClass *oc, void *data)
@@ -1174,9 +1206,35 @@ static const TypeInfo machvirt_info = {
     .class_init = virt_class_init,
 };
 
+static void virtv3_instance_init(Object *obj)
+{
+    virt_instance_init_common(obj, 3);
+}
+
+static void virtv3_class_init(ObjectClass *oc, void *data)
+{
+    MachineClass *mc = MACHINE_CLASS(oc);
+
+    mc->name = TYPE_VIRTV3_MACHINE;
+    mc->desc = "ARM Virtual Machine with GICv3",
+    mc->init = machvirt_init;
+    /* With gic3 full implementation (with bitops) rase the lmit to 128 */
+    mc->max_cpus = 64;
+}
+
+static const TypeInfo machvirtv3_info = {
+    .name = TYPE_VIRTV3_MACHINE,
+    .parent = TYPE_VIRT_MACHINE,
+    .instance_size = sizeof(VirtMachineState),
+    .instance_init = virtv3_instance_init,
+    .class_size = sizeof(VirtMachineClass),
+    .class_init = virtv3_class_init,
+};
+
 static void machvirt_machine_init(void)
 {
     type_register_static(&machvirt_info);
+    type_register_static(&machvirtv3_info);
 }
 
 machine_init(machvirt_machine_init);
