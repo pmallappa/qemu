@@ -110,7 +110,7 @@ static const MemMapEntry a15memmap[] = {
     [VIRT_UART] =               { 0x09000000, 0x00001000 },
     [VIRT_RTC] =                { 0x09010000, 0x00001000 },
     [VIRT_FW_CFG] =             { 0x09020000, 0x0000000a },
-    [VIRT_SMMU] =		{ 0x09030000, 0x00001000 },
+    [VIRT_SMMU] =		{ 0x09030000, 0x00020000 },
     [VIRT_MMIO] =               { 0x0a000000, 0x00000200 },
    /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
     [VIRT_PLATFORM_BUS] =       { 0x0c000000, 0x02000000 },
@@ -455,10 +455,11 @@ static void create_uart(const VirtBoardInfo *vbi, qemu_irq *pic)
     g_free(nodename);
 }
 
-static void create_smmu(const VirtBoardInfo *vbi, qemu_irq *pic)
+static uint32_t create_smmu(const VirtBoardInfo *vbi, qemu_irq *pic)
 {
-    char *nodename;
     int i;
+    uint32_t ph;
+    char *smmu;
     hwaddr base = vbi->memmap[VIRT_SMMU].base;
     hwaddr size = vbi->memmap[VIRT_SMMU].size;
     const char compat[] = "arm,smmu-v3";
@@ -469,23 +470,30 @@ static void create_smmu(const VirtBoardInfo *vbi, qemu_irq *pic)
                           pic[smmuirqmap[2].irq],
                           pic[smmuirqmap[3].irq], NULL);
 
-    nodename = g_strdup_printf("/smmuv3@%" PRIx64, base);
-    qemu_fdt_add_subnode(vbi->fdt, nodename);
-    qemu_fdt_setprop(vbi->fdt, nodename, "compatible", compat, sizeof(compat));
-    qemu_fdt_setprop_sized_cells(vbi->fdt, nodename, "reg",
+    ph = qemu_fdt_alloc_phandle(vbi->fdt);
+
+    smmu = g_strdup_printf("/smmuv3@%" PRIx64, base);
+    qemu_fdt_add_subnode(vbi->fdt, smmu);
+    qemu_fdt_setprop(vbi->fdt, smmu, "compatible", compat, sizeof(compat));
+    qemu_fdt_setprop_sized_cells(vbi->fdt, smmu, "reg",
                                  2, base, 2, size);
 
     for (i = 0; i < ARRAY_SIZE(smmuirqmap); i++) {
-        qemu_fdt_setprop_cells(vbi->fdt, nodename, "interrupts",
+        qemu_fdt_setprop_cells(vbi->fdt, smmu, "interrupts",
                                GIC_FDT_IRQ_TYPE_SPI, smmuirqmap[i].irq,
                                GIC_FDT_IRQ_FLAGS_LEVEL_HI);
 
-        qemu_fdt_setprop(vbi->fdt, nodename, "interrupt-names",
+        qemu_fdt_setprop(vbi->fdt, smmu, "interrupt-names",
                          smmuirqmap[i].name, strlen(smmuirqmap[i].name));
     }
-    qemu_fdt_setprop_cell(vbi->fdt, nodename, "clocks", vbi->clock_phandle);
-    qemu_fdt_setprop_string(vbi->fdt, nodename, "clock-names", "apb_pclk");
-    g_free(nodename);
+    qemu_fdt_setproc_cell(vbi->fdt, smmu, "#iommu_cells", 0);
+    qemu_fdt_setprop_cell(vbi->fdt, smmu, "clocks", vbi->clock_phandle);
+    qemu_fdt_setprop_string(vbi->fdt, smmu, "clock-names", "apb_pclk");
+
+    qemu_fdt_setprop_cell(vbi->fdt, smmu, "phandle", ph);
+    g_free(smmu);
+
+    return ph;
 }
 
 static void create_rtc(const VirtBoardInfo *vbi, qemu_irq *pic)
@@ -702,7 +710,7 @@ static void create_pcie_irq_map(const VirtBoardInfo *vbi, uint32_t gic_phandle,
                            0x7           /* PCI irq */);
 }
 
-static void create_pcie(const VirtBoardInfo *vbi, qemu_irq *pic)
+static void create_pcie(const VirtBoardInfo *vbi, qemu_irq *pic, const uint32_t smmu_ph)
 {
     hwaddr base_mmio = vbi->memmap[VIRT_PCIE_MMIO].base;
     hwaddr size_mmio = vbi->memmap[VIRT_PCIE_MMIO].size;
@@ -770,6 +778,8 @@ static void create_pcie(const VirtBoardInfo *vbi, qemu_irq *pic)
                                  2, base_mmio, 2, size_mmio);
 
     qemu_fdt_setprop_cell(vbi->fdt, nodename, "#interrupt-cells", 1);
+    qemu_fdt_setprop_cells(vbi->fdt, nodename, "iommus", smmu_ph);
+
     create_pcie_irq_map(vbi, vbi->gic_phandle, irq, nodename);
 
     g_free(nodename);
@@ -843,6 +853,7 @@ static void machvirt_init(MachineState *machine)
     VirtBoardInfo *vbi;
     VirtGuestInfoState *guest_info_state = g_malloc0(sizeof *guest_info_state);
     VirtGuestInfo *guest_info = &guest_info_state->info;
+    uint32_t smmu_ph;
     char **cpustr;
 
     if (!cpu_model) {
@@ -925,9 +936,9 @@ static void machvirt_init(MachineState *machine)
 
     create_rtc(vbi, pic);
 
-    create_smmu(vbi, pic);      /* Has to be before create_pcie */
+    smmu_ph = create_smmu(vbi, pic);      /* Has to be before create_pcie */
 
-    create_pcie(vbi, pic);
+    create_pcie(vbi, pic, smmu_ph);
 
     /* Create mmio transports, so the user can create virtio backends
      * (which will be automatically plugged in to the transports). If
