@@ -44,7 +44,8 @@
 #define ARM_SMMU_DEBUG
 #ifdef ARM_SMMU_DEBUG
 
-enum {SMMU_DBG_PANIC, SMMU_DBG_CRIT, SMMU_DBG_WARN, SMMU_DBG_DEBUG, SMMU_DBG_INFO};
+enum {SMMU_DBG_PANIC, SMMU_DBG_CRIT, SMMU_DBG_WARN,
+      SMMU_DBG_DEBUG, SMMU_DBG_DEBUG1, SMMU_DBG_DEBUG2, SMMU_DBG_INFO};
 
 #define DBG_BIT(bit)    (1 << SMMU_DBG_##bit)
 
@@ -73,14 +74,28 @@ typedef struct {
     uint32_t prod;
     uint32_t cons;
 
+    union {
+        struct {
+            uint8_t prod:1;
+            uint8_t cons:1;
+        };
+        uint8_t unused;
+    }wrap;
+
     uint16_t entries;           /* Number of entries */
     uint8_t  ent_size;          /* Size of entry in bytes */
     uint8_t  shift;             /* Size in log2 */
 } SMMUQueue;
 
-#define Q_ENTRY(q, idx) (q->base + q->ent_size * idx)
-#define Q_WRAP(q, pc) ((pc) >> (q)->shift)
-#define Q_IDX(q, pc) ((pc) & __SMMU_MASK((q)->entries))
+struct SMMUDevice {
+    void             *smmu;
+    uint32_t         sid;
+    int              busnum;
+    int              devfn;
+    MemoryRegion     mr;
+    AddressSpace     as;
+};
+typedef struct SMMUDevice SMMUDevice;
 
 typedef struct SMMUState {
     uint8_t          regs[SMMU_NREGS * sizeof(uint32_t)];
@@ -104,23 +119,48 @@ typedef struct SMMUState {
     };
 
     MemoryRegion     iomem;
-
     MemoryRegion     iommu;
     AddressSpace     iommu_as;
 
+    SMMUDevice pbdev[PCI_SLOT_MAX];
 } SMMUState;
 
-typedef struct SMMUPciState{
+#if 0
+typedef struct SMMUDevice{
     /* <private> */
     PCIDevice   dev;
     SMMUState   smmu_state;
-} SMMUPciState;
+} SMMUDevice;
+#endif
 
 typedef struct SMMUSysState {
     /* <private> */
     SysBusDevice  dev;
     SMMUState     smmu_state;
 } SMMUSysState;
+
+#define Q_ENTRY(q, idx) (q->base + q->ent_size * idx)
+#define Q_WRAP(q, pc) ((pc) >> (q)->shift)
+#define Q_IDX(q, pc) ((pc) & __SMMU_MASK((q)->shift))
+
+typedef enum {
+    CMD_Q_EMPTY,
+    CMD_Q_FULL,
+    CMD_Q_INUSE,
+} SMMUQStatus;
+
+static inline SMMUQStatus
+__queue_status(SMMUState *s, SMMUQueue *q)
+{
+    if (q->prod == q->cons && q->wrap.prod != q->wrap.cons)
+        return CMD_Q_FULL;
+    else if (q->prod == q->cons && q->wrap.prod == q->wrap.cons)
+        return CMD_Q_EMPTY;
+
+    return CMD_Q_INUSE;
+}
+#define smmu_is_q_full(s, q) (__queue_status(s, q) == CMD_Q_FULL)
+#define smmu_is_q_empty(s, q) (__queue_status(s, q) == CMD_Q_EMPTY)
 
 static inline int smmu_enabled(SMMUState *s)
 {
@@ -137,17 +177,8 @@ static inline int smmu_q_enabled(SMMUState *s, uint32_t q)
 {
     return s->regs[SMMU_REG_CR0] & q;
 }
-
-static inline int smmu_q_full(SMMUQueue *q)
-{
-    return (q->cons == q->prod) && (Q_WRAP(q, q->cons) != Q_WRAP(q, q->prod));
-}
-
 #define smmu_cmd_q_enabled(s) smmu_q_enabled(s, SMMU_CR0_CMDQ_ENABLE)
 #define smmu_evt_q_enabled(s) smmu_q_enabled(s, SMMU_CR0_EVTQ_ENABLE)
-
-#define smmu_evt_q_full(s) smmu_q_full(&s->evtq)
-#define smmu_cmd_q_full(s) smmu_q_full(&s->cmdq)
 
 #define smmu_gerror(s) (smmu_read32_reg(s, SMMU_REG_GERROR) ==  \
                         smmu_read32_reg(s, SMMU_REG_GERRORN))
@@ -316,7 +347,7 @@ static void smmu_create_event(SMMUState *s, hwaddr iova,
     if (!smmu_evt_q_enabled(s))
         overflow = true; goto set_overflow;
 
-    if (!smmu_evt_q_full(s))
+    if (!smmu_is_q_full(s, &s->evtq))
         overflow = true; goto set_overflow;
 
     EVT_SET_TYPE(&evt, error);
@@ -361,14 +392,6 @@ set_overflow:
  * PCI RID/ARID
  *
  */
-typedef struct {
-    int           busnum;
-    int           devfn;
-    SMMUState    *smmu;
-    MemoryRegion  mr;
-    AddressSpace  as;
-} SMMUDevice;
-
 static int
 __ste_valid_full(SMMUState *s, Ste *ste)
 {
@@ -478,7 +501,6 @@ ste_valid_full(SMMUState *s, Ste *ste)
     return __ste_valid_full(s, ste);
 }
 
-
 /*
  * TR - Translation Request
  * TT - Translated Tansaction
@@ -501,9 +523,9 @@ smmu_translate(MemoryRegion *iommu, hwaddr addr, bool is_write)
         .addr_mask = TARGET_PAGE_MASK,
         .perm = IOMMU_NONE,
     };
-
+    HERE();
     /* SMMU Bypass */
-    SMMU_DPRINTF(INFO, "1. SMMU Bypass check...\n");
+    SMMU_DPRINTF(DEBUG, "1. SMMU Bypass check...\n");
     /* We allow traffic through if SMMU is disabled */
     if (!smmu_enabled(s)) {
         SMMU_DPRINTF(CRIT, "SMMU Not enabled.. bypassing addr:%lx\n", addr);
@@ -647,28 +669,19 @@ static int smmu_evtq_update(SMMUState *s)
 static int smmu_cmdq_consume(SMMUState *s)
 {
     SMMUQueue *q = &s->cmdq;
-    uint64_t head, tail;
+    uint64_t val = 0;
     uint32_t error = SMMU_CMD_ERR_NONE;
-    bool wrap = false;
 
-    head = smmu_read32_reg(s, SMMU_REG_CMDQ_PROD);
-    //tail = smmu_read32_reg(s, SMMU_REG_CMDQ_CONS);
-    q->prod = head;
-    tail = Q_IDX(q, q->cons);
-
-    SMMU_DPRINTF(DEBUG, "CMDQ size:%d head:%lx, tail:%lx\n", q->entries, head, tail);
-
-    while (!SMMU_CMDQ_ERR(s) && (tail != head)) {
+    while (!SMMU_CMDQ_ERR(s) && !smmu_is_q_empty(s, &s->cmdq)) {
         Cmd cmd;
-        hwaddr addr = q->base + (sizeof(cmd) * tail);
+        hwaddr addr;
+
+        addr = q->base + (sizeof(cmd) * q->cons);
 
         if (smmu_read_sysmem(s, addr, &cmd, sizeof(cmd)) != MEMTX_OK) {
             error = SMMU_CMD_ERR_ABORT;
             goto out_while;
         }
-
-        SMMU_DPRINTF(DEBUG, "Reading Command @idx:%lx\n", tail);
-        dump_cmd(&cmd);
 
         switch(CMD_TYPE(&cmd)) {
         case SMMU_CMD_CFGI_STE:
@@ -680,48 +693,43 @@ static int smmu_cmdq_consume(SMMUState *s)
         case SMMU_CMD_TLBI_NH_ALL:
             break;
         case SMMU_CMD_SYNC:
+        case SMMU_CMD_PREFETCH_CONFIG:
+            break;
+        case SMMU_CMD_TLBI_NH_ASID:
+        case SMMU_CMD_TLBI_NH_VA:   /* too many of this is sent */
             break;
         default:
-            {                /* Check if we are coming here */
-                int i;
-                /*    Actually we should interrupt  */
+            { /* Actually we should interrupt  */
                 SMMU_DPRINTF(CRIT, "Unknown Command type: %x, ignoring\n",
                              CMD_TYPE(&cmd));
-                for (i = 0; i < ARRAY_SIZE(cmd.word); i++) {
-                    SMMU_DPRINTF(CRIT, "CMD[%2d]: %#010x\t CMD[%2d]: %#010x\n",
-                                 i, cmd.word[i], i+1, cmd.word[i+1]);
-                    i++;
-                }
+                dump_cmd(&cmd);
+                error = SMMU_CMD_ERR_ILLEGAL;
             }
-            error = SMMU_CMD_ERR_ILLEGAL;
-            goto out_while;
+            break; //goto out_while; // should be enabled at later stage
         }
 
-        tail++;
-        if (tail == q->entries) {
-            SMMU_DPRINTF(CRIT, "TAIL: wrapped\n");
-            tail = 0;
-            wrap = true;
+        q->cons++;
+        if (q->cons == q->entries) {
+            q->cons = 0;
+            q->wrap.cons++;     /* this will toggle */
         }
     }
 
 out_while:
-
     if (error) {
         uint32_t gerror = smmu_read32_reg(s, SMMU_REG_GERROR);
         gerror |= SMMU_GERROR_CMDQ;
-        smmu_write32_reg(s, SMMU_REG_CMDQ_CONS, tail);
-        tail |= error << 24;
+        smmu_write32_reg(s, SMMU_REG_GERROR, gerror);
+        val |= error << 24;
     }
+    val |= (q->wrap.cons << q->shift) | q->cons;
 
-    if (wrap)
-        tail ^= 1 << q->shift;
+    SMMU_DPRINTF(DEBUG2, "prod_wrap:%d, prod:%x cons_wrap:%d cons:%x\n",
+                 s->cmdq.wrap.prod, s->cmdq.prod,
+                 s->cmdq.wrap.cons, s->cmdq.cons);
 
-    SMMU_DPRINTF(DEBUG, "head:%lx, tail:%lx\n", head, tail);
-
-    /* Update tail pointer */
-    smmu_write32_reg(s, SMMU_REG_CMDQ_CONS, tail);
-    q->cons = tail;
+    /* Update consumer pointer */
+    smmu_write32_reg(s, SMMU_REG_CMDQ_CONS, val);
 
     return 0;
 }
@@ -730,9 +738,9 @@ static void smmu_update(SMMUState *s)
 {
     int error = 0;
 
-    /* Sanity check, do nothing if not enabled */
+    /* SMMU starts processing commands even when not enabled */
     if (!smmu_enabled(s))
-        SMMU_DPRINTF(CRIT, "NOT ENABLED\n");
+        goto check_cmdq;
 
     /* EVENT Q updates takes more priority */
     if ((smmu_evt_q_enabled(s)))
@@ -741,29 +749,52 @@ static void smmu_update(SMMUState *s)
     if (error)
         smmu_create_event(s, 0, 0, 0, error);
 
-    if (smmu_cmd_q_enabled(s)) {
+check_cmdq:
+    if (smmu_cmd_q_enabled(s) && !SMMU_CMDQ_ERR(s)) {
         smmu_cmdq_consume(s);
     }
 }
 
 static inline void
-smmu_update_q(SMMUState *s, SMMUQueue *q, uint32_t val)
+smmu_update_q(SMMUState *s, SMMUQueue *q, uint32_t val, uint32_t off)
 {
-    q->base = val & ~0x1f;
-    q->shift = val & 0x1f;
-    q->entries = 1 << (q->shift);
+    bool update = false;
+
+    switch (off) {
+    case SMMU_REG_CMDQ_BASE:
+    case SMMU_REG_EVTQ_BASE:
+        q->base = val & ~0x1f;
+        q->shift = val & 0x1f;
+        q->entries = 1 << (q->shift);
+        break;
+    case SMMU_REG_CMDQ_PROD:
+        update = 1;
+    case SMMU_REG_EVTQ_PROD:
+        q->prod = Q_IDX(q, val);
+        q->wrap.prod = val >> q->shift;
+        break;
+    case SMMU_REG_EVTQ_CONS:
+    case SMMU_REG_CMDQ_CONS:
+        q->cons = Q_IDX(q, val);
+        q->wrap.cons = val >> q->shift;
+        break;
+    }
+
+    if (update)
+        smmu_update(s);
 }
 
 static void smmu_write_mmio(void *opaque, hwaddr addr,
                             uint64_t val, unsigned size)
 {
     SMMUState *s = opaque;
-    bool check_queue = false;
+    SMMUQueue *q = NULL;
+    bool update_queue = false;
     uint32_t val32 = (uint32_t)val;
     bool is64 = false;
     int i;
 
-    SMMU_DPRINTF(DEBUG, "reg:%lx cur: %lx new: %lx\n", addr,
+    SMMU_DPRINTF(DEBUG2, "reg:%lx cur: %lx new: %lx\n", addr,
                  smmu_read_mmio(opaque, addr, size), val);
 
     /*
@@ -796,15 +827,17 @@ static void smmu_write_mmio(void *opaque, hwaddr addr,
 
     case SMMU_REG_CMDQ_BASE:
         is64 = true;
-        smmu_update_q(s, &s->cmdq, val); break;
-
+    case SMMU_REG_CMDQ_PROD:
+    case SMMU_REG_CMDQ_CONS:
+        q = &s->cmdq;
+        update_queue = 1;
+        break;
     case SMMU_REG_EVTQ_BASE:
-        is64 = true;
-        smmu_update_q(s, &s->evtq, val); break;
-
-    case SMMU_REG_CMDQ_PROD:    case SMMU_REG_EVTQ_PROD:
-    case SMMU_REG_EVTQ_CONS:    case SMMU_REG_CMDQ_CONS:
-        check_queue = 1;
+        is64 = true;            /* fallthru */
+    case SMMU_REG_EVTQ_CONS:
+    case SMMU_REG_EVTQ_PROD:
+        q = &s->evtq;
+        update_queue = 1;
         break;
 
     case SMMU_REG_STRTAB_BASE:
@@ -836,8 +869,8 @@ static void smmu_write_mmio(void *opaque, hwaddr addr,
     else
         smmu_write32_reg(s, addr, val32);
 
-    if (check_queue)
-        smmu_update(s);
+    if (update_queue)
+        smmu_update_q(s, q, val, addr);
 }
 
 static const MemoryRegionOps smmu_mem_ops = {
@@ -1013,11 +1046,12 @@ static const TypeInfo smmu_info = {
     .class_init    = smmu_class_init,
 };
 
+#if 0
 #define PCI_DEVICE_ID_BRCM_SMMU         0x9005
 
 static void smmu_pci_realize(PCIDevice *pci_dev, Error **errp)
 {
-    SMMUPciState *pci_smmu = SMMU_PCI_DEV(pci_dev);
+    SMMUDevice *pci_smmu = SMMU_PCI_DEV(pci_dev);
     SMMUState *s = &pci_smmu->smmu_state;
     PCIBus *b = NULL;
     uint8_t *pci_conf;
@@ -1035,7 +1069,7 @@ static void smmu_pci_realize(PCIDevice *pci_dev, Error **errp)
 
 static void smmu_pci_exit(PCIDevice *dev)
 {
-    //SMMUPciState *pci = DO_UPCAST(SMMUPciState, dev, dev);
+    //SMMUDevice *pci = DO_UPCAST(SMMUDevice, dev, dev);
 
 }
 
@@ -1061,11 +1095,11 @@ static const TypeInfo smmu_pci_info = {
     .instance_size = sizeof(SMMUPciState),
     .class_init    = smmu_pci_class_init,
 };
+#endif
 
 static void smmu_register_types(void)
 {
     type_register_static(&smmu_info);
-    type_register_static(&smmu_pci_info);
 }
 
 type_init(smmu_register_types)
