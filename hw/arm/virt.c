@@ -455,23 +455,38 @@ static void create_uart(const VirtBoardInfo *vbi, qemu_irq *pic)
     g_free(nodename);
 }
 
-static uint32_t create_smmu(const VirtBoardInfo *vbi, qemu_irq *pic)
+static uint32_t create_smmu_ph(const VirtBoardInfo *vbi, qemu_irq *pic)
 {
-    int i;
-    uint32_t ph;
-    char *smmu;
+#if 0
     hwaddr base = vbi->memmap[VIRT_SMMU].base;
-    hwaddr size = vbi->memmap[VIRT_SMMU].size;
-    const char compat[] = "arm,smmu-v3";
+//    hwaddr size = vbi->memmap[VIRT_SMMU].size;
 
     sysbus_create_varargs("smmuv3", base,
                           pic[smmuirqmap[0].irq],
                           pic[smmuirqmap[1].irq],
                           pic[smmuirqmap[2].irq],
                           pic[smmuirqmap[3].irq], NULL);
+#endif
+    return qemu_fdt_alloc_phandle(vbi->fdt);
+}
 
-    ph = qemu_fdt_alloc_phandle(vbi->fdt);
-
+static void create_smmu(const VirtBoardInfo *vbi,
+                        qemu_irq *pic, uint32_t ph)
+{
+    int i;
+    char *smmu;
+    const char compat[] = "arm,smmu-v3";
+    hwaddr base = vbi->memmap[VIRT_SMMU].base;
+    hwaddr size = vbi->memmap[VIRT_SMMU].size;
+#if 0
+    sysbus_create_varargs("smmuv3", base,
+                          pic[smmuirqmap[0].irq],
+                          pic[smmuirqmap[1].irq],
+                          pic[smmuirqmap[2].irq],
+                          pic[smmuirqmap[3].irq], NULL);
+#else
+    sysbus_create_simple("smmuv3", base, pic[smmuirqmap[0].irq]);
+#endif
     smmu = g_strdup_printf("/smmuv3@%" PRIx64, base);
     qemu_fdt_add_subnode(vbi->fdt, smmu);
     qemu_fdt_setprop(vbi->fdt, smmu, "compatible", compat, sizeof(compat));
@@ -486,14 +501,13 @@ static uint32_t create_smmu(const VirtBoardInfo *vbi, qemu_irq *pic)
         qemu_fdt_setprop(vbi->fdt, smmu, "interrupt-names",
                          smmuirqmap[i].name, strlen(smmuirqmap[i].name));
     }
-    qemu_fdt_setproc_cell(vbi->fdt, smmu, "#iommu_cells", 0);
+
     qemu_fdt_setprop_cell(vbi->fdt, smmu, "clocks", vbi->clock_phandle);
+    qemu_fdt_setprop_cell(vbi->fdt, smmu, "#iommu-cells", 0);
     qemu_fdt_setprop_string(vbi->fdt, smmu, "clock-names", "apb_pclk");
 
     qemu_fdt_setprop_cell(vbi->fdt, smmu, "phandle", ph);
     g_free(smmu);
-
-    return ph;
 }
 
 static void create_rtc(const VirtBoardInfo *vbi, qemu_irq *pic)
@@ -936,9 +950,11 @@ static void machvirt_init(MachineState *machine)
 
     create_rtc(vbi, pic);
 
-    smmu_ph = create_smmu(vbi, pic);      /* Has to be before create_pcie */
+    smmu_ph = create_smmu_ph(vbi, pic);      /* Has to be before create_pcie */
 
     create_pcie(vbi, pic, smmu_ph);
+
+    create_smmu(vbi, pic, smmu_ph);
 
     /* Create mmio transports, so the user can create virtio backends
      * (which will be automatically plugged in to the transports). If

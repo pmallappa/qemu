@@ -65,7 +65,7 @@ static unsigned char dbg_bits = DBG_BIT(PANIC) | DBG_BIT(CRIT) | DBG_BIT(DEBUG);
 #define SMMU_DEV(obj) OBJECT_CHECK(SMMUState, (obj), TYPE_SMMU_DEV)
 
 #define SMMU_SYS_DEV(obj) OBJECT_CHECK(SMMUSysState, (obj), TYPE_SMMU_DEV)
-#define SMMU_PCI_DEV(obj) OBJECT_CHECK(SMMUPciState, (obj), TYPE_SMMU_DEV)
+#define SMMU_PCI_DEV(obj) OBJECT_CHECK(SMMUDevice, (obj), TYPE_SMMU_DEV)
 
 typedef struct {
     hwaddr   base;
@@ -589,18 +589,18 @@ static const MemoryRegionIOMMUOps smmu_ops = {
 static AddressSpace *smmu_pci_iommu(PCIBus *bus, void *opaque, int devfn)
 {
     SMMUState *s = opaque;
-    SMMUDevice *sdev;
+    SMMUDevice *sdev = &s->pbdev[PCI_SLOT(devfn)];
 
     HERE();
-
-    sdev = g_malloc0(sizeof(*sdev));
+    if (!s->iommu.iommu_ops) {
+    }
 
     sdev->smmu = s;
+    sdev->sid = (pci_bus_num(bus) << 8) | devfn;
+    sdev->devfn = devfn;
     sdev->busnum = pci_bus_num(bus);
-
-    memory_region_init_iommu(&sdev->mr, OBJECT(s),
-                             &smmu_ops, "arm_smmuv3", UINT64_MAX);
-    address_space_init(&sdev->as, &sdev->mr, "arm_smmuv3");
+    sdev->as = s->iommu_as;
+    sdev->mr = s->iommu;
 
     return &sdev->as;
 }
@@ -629,7 +629,7 @@ static uint64_t smmu_read_mmio(void *opaque, hwaddr addr,
         val = smmu_read64_reg(s, addr); break;
     }
 
-    SMMU_DPRINTF(CRIT, "addr: %lx val:%lx\n",addr, val);
+    SMMU_DPRINTF(DEBUG2, "addr: %lx val:%lx\n",addr, val);
     return val;
 }
 
@@ -922,39 +922,57 @@ static void _smmu_populate_regs(SMMUState *s)
 
 static int smmu_init(SysBusDevice *dev)
 {
+    int i;
     SMMUSysState *sys = SMMU_SYS_DEV(dev);
     SMMUState *s = &sys->smmu_state;
     PCIBus *pcibus = pci_find_primary_bus();
-    int i;
+
     HERE();
+
+    memory_region_init_iommu(&s->iommu, OBJECT(s),
+                             &smmu_ops, "iommu-smmu", UINT64_MAX);
+    address_space_init(&s->iommu_as, &s->iommu, "smmu-pci");
+
     /* Register Access */
     memory_region_init_io(&s->iomem, OBJECT(sys), &smmu_mem_ops,
                           s, "smmuv3", 0x1000);
-
-    /* Host memory as seen from the PCI side, via the IOMMU.  */
-    _smmu_populate_regs(s);
 
     sysbus_init_mmio(dev, &s->iomem);
 
     for (i = 0; i < ARRAY_SIZE(s->irq); i++)
         sysbus_init_irq(dev, &s->irq[i]);
-#if 0
-    /* Host Memory Access */
-    memory_region_init_iommu(&s->iommu, OBJECT(sys), &smmu_ops,
-                             "smmuv3", UINT64_MAX);
+    HERE();
 
-    address_space_init(&s->iommu_as, &s->iommu, "smmu-as");
-#endif
-
-    if (pcibus)
+    if (pcibus) {
+        printf("Found PCI bus, setting up iommu\n");
         pci_setup_iommu(pcibus, smmu_pci_iommu, s);
+    } else
+        printf("Unable to find PCIbus, IOMMU will not be functional\n");
 
     return 0;
 }
 
 static void smmu_reset(DeviceState *dev)
 {
+    SMMUSysState *sys = SMMU_SYS_DEV(dev);
+    SMMUState *s = &sys->smmu_state;
+
+#if 0
+    int i;
+
     HERE();
+    for (i = 0; i < PCI_SLOT_MAX; i++) {
+        printf("i:%d\n", i);
+        memory_region_init_iommu(&s->pbdev[i].mr, OBJECT(s),
+                                 &smmu_ops, "iommu-smmu", UINT64_MAX);
+        address_space_init(&s->pbdev[i].as, &s->pbdev[i].mr, "smmu-pci");
+    }
+#else
+#endif
+    HERE();
+
+    _smmu_populate_regs(s);
+
 }
 
 static Property smmu_properties[] = {
@@ -963,6 +981,18 @@ static Property smmu_properties[] = {
     DEFINE_PROP_END_OF_LIST(),
 };
 
+#if 0
+static void smmu_realize(DeviceState *dev, Error **errp)
+{
+    //SysBusDevice *sdev = SYS_BUS_DEVICE(dev);
+    //SMMUSysState *sys = SMMU_SYS_DEV(dev);
+    //SMMUState *s = &sys->smmu_state;
+
+    HERE();
+
+}
+#endif
+
 static void smmu_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
@@ -970,6 +1000,7 @@ static void smmu_class_init(ObjectClass *klass, void *data)
 
     dc->reset = smmu_reset;
     k->init = smmu_init;
+    //dc->realize = smmu_realize;
     dc->vmsd = &vmstate_smmu;
     dc->props = smmu_properties;
 
