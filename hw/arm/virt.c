@@ -52,6 +52,7 @@
 #include "kvm_arm.h"
 #include "hw/smbios/smbios.h"
 #include "qapi/visitor.h"
+#include "hw/arm/smmuv3.h"
 
 /* Number of external interrupt lines to configure the GIC with */
 #define NUM_IRQS 256
@@ -71,7 +72,7 @@ typedef struct VirtBoardInfo {
     uint32_t clock_phandle;
     uint32_t gic_phandle;
     uint32_t v2m_phandle;
-    const char *class_name;
+    uint8_t smmu_irqs;
 } VirtBoardInfo;
 
 typedef struct {
@@ -82,8 +83,7 @@ typedef struct {
 typedef struct {
     MachineState parent;
     bool secure;
-    bool highmem;
-    int32_t gic_version;
+    uint8_t smmu_irqs;
 } VirtMachineState;
 
 #define TYPE_VIRT_MACHINE   MACHINE_TYPE_NAME("virt-v3")
@@ -123,6 +123,7 @@ static const MemMapEntry a15memmap[] = {
     [VIRT_UART] =               { 0x09000000, 0x00001000 },
     [VIRT_RTC] =                { 0x09010000, 0x00001000 },
     [VIRT_FW_CFG] =             { 0x09020000, 0x0000000a },
+    [VIRT_SMMU] =		{ 0x09030000, 0x00020000 }, /* 128K, necessary */
     [VIRT_MMIO] =               { 0x0a000000, 0x00000200 },
     /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
     [VIRT_PLATFORM_BUS] =       { 0x0c000000, 0x02000000 },
@@ -141,6 +142,16 @@ static const int a15irqmap[] = {
     [VIRT_MMIO] = 16, /* ...to 16 + NUM_VIRTIO_TRANSPORTS - 1 */
     [VIRT_GIC_V2M] = 48, /* ...to 48 + NUM_GICV2M_SPIS - 1 */
     [VIRT_PLATFORM_BUS] = 112, /* ...to 112 + PLATFORM_BUS_NUM_IRQS -1 */
+};
+
+static const struct smmuirq {
+    const char *name;
+    int irq;
+} smmuirqmap[] = {
+    [SMMU_IRQ_EVTQ]= {"eventq", 74},
+    [SMMU_IRQ_PRIQ]= {"priq", 75},
+    [SMMU_IRQ_CMD_SYNC]= {"cmdq_sync", 77},
+    [SMMU_IRQ_GERROR]= {"gerror", 79},
 };
 
 static VirtBoardInfo machines[] = {
@@ -335,7 +346,7 @@ static void fdt_add_cpu_nodes(const VirtBoardInfo *vbi)
     }
 
     qemu_fdt_add_subnode(vbi->fdt, "/cpus");
-    qemu_fdt_setprop_cell(vbi->fdt, "/cpus", "#address-cells", addr_cells);
+    qemu_fdt_setprop_cell(vbi->fdt, "/cpus", "#address-cells", 0x1);
     qemu_fdt_setprop_cell(vbi->fdt, "/cpus", "#size-cells", 0x0);
 
     for (cpu = vbi->smp_cpus - 1; cpu >= 0; cpu--) {
@@ -352,14 +363,7 @@ static void fdt_add_cpu_nodes(const VirtBoardInfo *vbi)
                                         "enable-method", "psci");
         }
 
-        if (addr_cells == 2) {
-            qemu_fdt_setprop_u64(vbi->fdt, nodename, "reg",
-                                 armcpu->mp_affinity);
-        } else {
-            qemu_fdt_setprop_cell(vbi->fdt, nodename, "reg",
-                                  armcpu->mp_affinity);
-        }
-
+        qemu_fdt_setprop_cell(vbi->fdt, nodename, "reg", armcpu->mp_affinity);
         g_free(nodename);
     }
 }
@@ -383,8 +387,16 @@ static void fdt_add_gic_node(VirtBoardInfo *vbi, int type)
     qemu_fdt_setprop_cell(vbi->fdt, "/", "interrupt-parent", vbi->gic_phandle);
 
     qemu_fdt_add_subnode(vbi->fdt, "/intc");
+    /* 'cortex-a15-gic' means 'GIC v2' */
+    qemu_fdt_setprop_string(vbi->fdt, "/intc", "compatible",
+                            "arm,cortex-a15-gic");
     qemu_fdt_setprop_cell(vbi->fdt, "/intc", "#interrupt-cells", 3);
     qemu_fdt_setprop(vbi->fdt, "/intc", "interrupt-controller", NULL, 0);
+    qemu_fdt_setprop_sized_cells(vbi->fdt, "/intc", "reg",
+                                     2, vbi->memmap[VIRT_GIC_DIST].base,
+                                     2, vbi->memmap[VIRT_GIC_DIST].size,
+                                     2, vbi->memmap[VIRT_GIC_CPU].base,
+                                     2, vbi->memmap[VIRT_GIC_CPU].size);
     qemu_fdt_setprop_cell(vbi->fdt, "/intc", "#address-cells", 0x2);
     qemu_fdt_setprop_cell(vbi->fdt, "/intc", "#size-cells", 0x2);
     qemu_fdt_setprop(vbi->fdt, "/intc", "ranges", NULL, 0);
@@ -446,30 +458,10 @@ static void create_gic(VirtBoardInfo *vbi, qemu_irq *pic, int type, bool secure)
      * interrupts; there are always 32 of the former (mandated by GIC spec).
      */
     qdev_prop_set_uint32(gicdev, "num-irq", NUM_IRQS + 32);
-    if (!kvm_irqchip_in_kernel()) {
-        if (type == 3) {
-            /* AARCH64 has 4 security levels */
-            qdev_prop_set_uint8(gicdev, "security-levels", secure ? 1 : 0);
-        } else {
-            qdev_prop_set_bit(gicdev, "has-security-extensions", secure);
-        }
-    }
     qdev_init_nofail(gicdev);
     gicbusdev = SYS_BUS_DEVICE(gicdev);
     sysbus_mmio_map(gicbusdev, 0, vbi->memmap[VIRT_GIC_DIST].base);
-    if (type == 3) {
-        sysbus_mmio_map(gicbusdev, 1, vbi->memmap[VIRT_GIC_REDIST].base);
-    } else {
-        sysbus_mmio_map(gicbusdev, 1, vbi->memmap[VIRT_GIC_CPU].base);
-    }
-
-    if (type == 3) {
-        /* Connect GIC to CPU */
-        for (i = 0; i < smp_cpus; i++) {
-            CPUState *cpu = qemu_get_cpu(i);
-            aatch64_registers_with_opaque_set(OBJECT(cpu), (void *)gicdev);
-        }
-    }
+    sysbus_mmio_map(gicbusdev, 1, vbi->memmap[VIRT_GIC_CPU].base);
 
     /* Wire the outputs from each CPU's generic timer to the
      * appropriate GIC PPI inputs, and the GIC's IRQ output to
@@ -755,8 +747,59 @@ static void create_pcie_irq_map(const VirtBoardInfo *vbi, uint32_t gic_phandle,
                            0x7           /* PCI irq */);
 }
 
-static void create_pcie(const VirtBoardInfo *vbi, qemu_irq *pic,
-                        bool use_highmem)
+static void create_smmu(const VirtBoardInfo *vbi, qemu_irq *pic)
+{
+    hwaddr base = vbi->memmap[VIRT_SMMU].base;
+
+    if (vbi->smmu_irqs == 1)
+        sysbus_create_simple("smmuv3", base, pic[smmuirqmap[0].irq]);
+    else
+        sysbus_create_varargs("smmuv3", base,
+                              pic[smmuirqmap[0].irq],
+                              pic[smmuirqmap[1].irq],
+                              pic[smmuirqmap[2].irq],
+                              pic[smmuirqmap[3].irq], NULL);
+}
+
+static uint32_t create_smmu_fdt(const VirtBoardInfo *vbi,
+                                qemu_irq *pic)
+{
+    int i;
+    char *smmu;
+    int nirqs = vbi->smmu_irqs == 1? 1: ARRAY_SIZE(smmuirqmap);
+    uint32_t ph;
+    const char compat[] = "arm,smmu-v3";
+    hwaddr base = vbi->memmap[VIRT_SMMU].base;
+    hwaddr size = vbi->memmap[VIRT_SMMU].size;
+
+    ph = qemu_fdt_alloc_phandle(vbi->fdt);
+    smmu = g_strdup_printf("/smmuv3@%" PRIx64, base);
+    qemu_fdt_add_subnode(vbi->fdt, smmu);
+    qemu_fdt_setprop(vbi->fdt, smmu, "compatible", compat, sizeof(compat));
+    qemu_fdt_setprop_sized_cells(vbi->fdt, smmu, "reg",
+                                 2, base, 2, size);
+
+    for (i = 0; i < nirqs; i++) {
+        qemu_fdt_setprop_cells(vbi->fdt, smmu, "interrupts",
+                               GIC_FDT_IRQ_TYPE_SPI, smmuirqmap[i].irq,
+                               GIC_FDT_IRQ_FLAGS_LEVEL_HI);
+
+        qemu_fdt_setprop(vbi->fdt, smmu, "interrupt-names",
+                         smmuirqmap[i].name, strlen(smmuirqmap[i].name));
+    }
+
+    qemu_fdt_setprop_cell(vbi->fdt, smmu, "clocks", vbi->clock_phandle);
+    qemu_fdt_setprop_cell(vbi->fdt, smmu, "#iommu-cells", 0);
+    qemu_fdt_setprop_string(vbi->fdt, smmu, "clock-names", "apb_pclk");
+
+    qemu_fdt_setprop_cell(vbi->fdt, smmu, "phandle", ph);
+    g_free(smmu);
+
+    return ph;
+}
+
+static void create_pcie(const VirtBoardInfo *vbi, qemu_irq *pic, 
+			bool use_highmem, uint32_t smmu_ph)
 {
     hwaddr base_mmio = vbi->memmap[VIRT_PCIE_MMIO].base;
     hwaddr size_mmio = vbi->memmap[VIRT_PCIE_MMIO].size;
@@ -851,6 +894,7 @@ static void create_pcie(const VirtBoardInfo *vbi, qemu_irq *pic,
     }
 
     qemu_fdt_setprop_cell(vbi->fdt, nodename, "#interrupt-cells", 1);
+    qemu_fdt_setprop_cells(vbi->fdt, nodename, "iommus", smmu_ph);
     create_pcie_irq_map(vbi, vbi->gic_phandle, irq, nodename);
 
     g_free(nodename);
@@ -956,6 +1000,7 @@ static void machvirt_init(MachineState *machine)
     VirtGuestInfoState *guest_info_state = g_malloc0(sizeof *guest_info_state);
     VirtGuestInfo *guest_info = &guest_info_state->info;
     char **cpustr;
+    uint32_t smmu_ph;
 
     if (!cpu_model) {
         cpu_model = "cortex-a15";
@@ -990,6 +1035,8 @@ static void machvirt_init(MachineState *machine)
         exit(1);
     }
 
+    vbi->smmu_irqs = vms->smmu_irqs;
+	
     create_fdt(vbi);
 
     for (n = 0; n < smp_cpus; n++) {
@@ -1049,8 +1096,11 @@ static void machvirt_init(MachineState *machine)
 
     create_rtc(vbi, pic);
 
-    create_pcie(vbi, pic, vms->highmem);
+    smmu_ph = create_smmu_fdt(vbi, pic);
 
+    create_pcie(vbi, pic, vms->highmem, smmu_ph);
+
+    create_smmu(vbi, pic);
     /* Create mmio transports, so the user can create virtio backends
      * (which will be automatically plugged in to the transports). If
      * no backend is created the transport will just sit harmlessly idle.
@@ -1157,6 +1207,11 @@ static void virt_instance_init(Object *obj)
                                     "Set on/off to enable/disable the ARM "
                                     "Security Extensions (TrustZone)",
                                     NULL);
+    object_property_add_uint8_ptr(obj, "smmu_irqs", &vms->smmu_irqs, NULL);
+    object_property_set_description(obj, "smmu_irqs",
+                                    "No. of irqs for smmu "
+                                    "some implementations have 1 irq (default 4)",
+                                    NULL);
 
     /* High memory is enabled by default */
     vms->highmem = true;
@@ -1185,6 +1240,7 @@ static void virt_class_init(ObjectClass *oc, void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
 
+    mc->name = TYPE_VIRT_MACHINE;
     mc->desc = "ARM Virtual Machine",
     mc->init = machvirt_init;
     /* Our maximum number of CPUs depends on how many redistributors
