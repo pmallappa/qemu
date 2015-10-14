@@ -65,7 +65,6 @@ static unsigned char dbg_bits = DBG_BIT(PANIC) | DBG_BIT(CRIT) | DBG_BIT(DEBUG);
 #define SMMU_DEV(obj) OBJECT_CHECK(SMMUState, (obj), TYPE_SMMU_DEV)
 
 #define SMMU_SYS_DEV(obj) OBJECT_CHECK(SMMUSysState, (obj), TYPE_SMMU_DEV)
-#define SMMU_PCI_DEV(obj) OBJECT_CHECK(SMMUDevice, (obj), TYPE_SMMU_DEV)
 
 typedef struct {
     hwaddr   base;
@@ -85,6 +84,15 @@ typedef struct {
     uint8_t  ent_size;          /* Size of entry in bytes */
     uint8_t  shift;             /* Size in log2 */
 } SMMUQueue;
+
+typedef struct SMMUDevice {
+    void             *smmu;
+    uint32_t         sid;
+    int              busnum;
+    int              devfn;
+    MemoryRegion     mr;
+    AddressSpace     as;
+} SMMUDevice;
 
 typedef struct SMMUState {
     uint8_t          regs[SMMU_NREGS * sizeof(uint32_t)];
@@ -108,6 +116,11 @@ typedef struct SMMUState {
     };
 
     MemoryRegion     iomem;
+    /* IOMMU Address space */
+    MemoryRegion     iommu;
+    AddressSpace     iommu_as;
+
+    SMMUDevice pbdev[PCI_SLOT_MAX];
 } SMMUState;
 
 typedef struct SMMUSysState {
@@ -141,7 +154,7 @@ __queue_status(SMMUState *s, SMMUQueue *q)
 
 static inline int smmu_enabled(SMMUState *s)
 {
-    return s->regs[SMMU_REG_CR0] & SMMU_CR0_SMMU_ENABLE;
+    return (s->regs[SMMU_REG_CR0] & SMMU_CR0_SMMU_ENABLE) != 0;
 }
 
 static inline int smmu_irq_enabled(SMMUState *s, uint32_t q)
@@ -570,13 +583,323 @@ static void _smmu_populate_regs(SMMUState *s)
     s->evtq.ent_size = sizeof(Evt);
 }
 
+#define STM2U64(stm) ({                                 \
+            uint64_t hi, lo;                            \
+            hi = (stm)->word[1];                        \
+            lo = (stm)->word[0] & ~(uint64_t)0x1f;      \
+            hi << 32 | lo;                              \
+        })
+
+#define STMSPAN(stm) (1 << ((stm)->word[0] & 0x1f))
+
+static int smmu_find_ste(SMMUState *s, uint16_t sid, Ste *ste)
+{
+    hwaddr addr;
+
+    /* Check SID range */
+    if (sid > (1 << s->sid_size))
+        return SMMU_EVT_C_BAD_SID;
+
+    if (s->features & SMMU_FEATURE_2LVL_STE) {
+        int span;
+        hwaddr stm_addr;
+        STEDesc stm;
+        int l1_ste_offset, l2_ste_offset;
+
+        if (sid > (1 << s->sid_split))
+            return SMMU_EVT_C_BAD_STE;
+
+        l1_ste_offset = sid >> s->sid_split;
+        l2_ste_offset = sid & ~(1 << s->sid_split);
+
+        stm_addr = (hwaddr)(s->strtab_base + l1_ste_offset * sizeof(STEDesc));
+        smmu_read_sysmem(s, stm_addr, &stm, sizeof(stm));
+
+        span = STMSPAN(&stm);
+
+        if (l2_ste_offset > span)
+            return SMMU_EVT_C_BAD_STE;
+
+        addr = STM2U64(&stm) + l2_ste_offset * sizeof(Ste);
+    } else
+        addr = s->strtab_base + sid * sizeof(Ste);
+
+    if (smmu_read_sysmem(s, addr, ste, sizeof(Ste) != MEMTX_OK))
+        return SMMU_EVT_F_UUT;
+
+    return 0;
+}
+
+static int
+__ste_valid_full(SMMUState *s, Ste *ste)
+{
+    uint32_t _config = STE_CONFIG(ste) & 0x7,
+        idr0 = s->regs[SMMU_REG_IDR0],
+        idr5 = s->regs[SMMU_REG_IDR5];
+
+    uint32_t httu = extract32(idr0, 6, 2);
+    bool config[] = {_config & 0x1,
+                     _config & 0x2,
+                     _config & 0x3};
+    bool granule_supported = (1 << STE_S2TG(ste)) & (idr5 >> 4);
+
+    bool s1p = idr0 & SMMU_IDR0_S1P,
+        s2p = idr0 & SMMU_IDR0_S2P,
+        hyp = idr0 & SMMU_IDR0_HYP,
+        cd2l = idr0 & SMMU_IDR0_CD2L,
+        idr0_vmid = idr0 & SMMU_IDR0_VMID16,
+        ats = idr0 & SMMU_IDR0_ATS,
+        ttf0 = (idr0 >> 2) & 0x1,
+        ttf1 = (idr0 >> 3) & 0x1;
+
+    int ssidsz = (s->regs[SMMU_REG_IDR1] >> 6) & 0x1f;
+
+    uint32_t ste_vmid = STE_S2VMID(ste),
+        ste_eats = STE_EATS(ste),
+        ste_s2s = STE_S2S(ste),
+        ste_s1fmt = STE_S1FMT(ste),
+        aa64 = STE_S2AA64(ste),
+        ste_s1cdmax = STE_S1CDMAX(ste);
+
+    uint8_t ste_strw = STE_STRW(ste);
+    uint64_t oas, max_pa;
+    bool strw_ign;
+    bool addr_out_of_range;
+
+    if (!STE_VALID(ste))
+        return false;
+
+    if (!config[2] &&
+        ((!s1p && config[0]) ||
+         (!s2p && config[1]) ||
+         (s2p && config[1]) ||
+         (!ssidsz && ste_s1cdmax && config[0] && !cd2l &&
+          (ste_s1fmt == 1 || ste_s1fmt == 2)) ||
+         (ats && ((_config & 0x3) == 0) &&
+          ((ste_eats == 2 && (_config != 0x7 || ste_s2s)) ||
+           (ste_eats == 1 && !ste_s2s))) ||
+         (config[0] && (ssidsz && (ste_s1cdmax > ssidsz)))))
+        return false;
+
+    oas = MIN(STE_S2PS(ste), idr5 & 0x7);
+
+    if (oas == 3)
+        max_pa = ~(1UL << 42);
+    else
+        max_pa = ~(1UL << (32 + (oas * 4)));
+
+    strw_ign = (!s1p || !hyp || (_config == 4));
+
+    addr_out_of_range = (int64_t)(max_pa - STE_S2TTB(ste)) < 0;
+
+    if (config[1] &&
+        (!granule_supported || addr_out_of_range ||
+         (!aa64 && !ttf0) || (aa64 && ttf1)  ||
+         ((STE_S2HA(ste) || STE_S2HD(ste)) && !aa64) ||
+         ((STE_S2HA(ste) || STE_S2HD(ste)) && !httu) ||
+         (STE_S2HD(ste) && httu)))
+        return false;
+
+        if (s2p && (config[0] == 0 && config[1]) &&
+            (strw_ign || !ste_strw) && !idr0_vmid && !(ste_vmid>>8))
+        return false;
+
+    return true;
+}
+
+/*
+ * This should look similar to that given in the SMMU spec 0.11
+ * assumption:
+ *      - We only support S1-Only or S2-Only translation for now
+ */
+static int
+is_cd_valid(SMMUState *s, Ste *ste, Cd *cd)
+{
+    return CD_VALID(cd);
+}
+
+static int
+is_ste_valid(SMMUState *s, Ste *ste)
+{
+    return STE_VALID(ste);
+}
+
+static int
+is_ste_bypass(SMMUState *s, Ste *ste)
+{
+    return STE_CONFIG(ste) == STE_CONFIG_S1BY_S2BY;
+}
+
+static int
+ste_valid_full(SMMUState *s, Ste *ste)
+{
+    if (is_ste_valid(s, ste))
+        return 0;
+
+    return __ste_valid_full(s, ste);
+}
+
+static uint16_t smmu_get_sid(int busnum, int devfn)
+{
+    return  ((busnum & 0xff) << 8) | (devfn & 0x7);
+}
+
+static Cd *smmu_get_cd(SMMUState *s, Ste *ste, uint32_t ssid)
+{
+    Cd *cd = NULL;
+
+    if (STE_S1CDMAX(ste) != 0) {
+        SMMU_DPRINTF(CRIT, "Multilevel Ctx Descriptor not supported yet\n");
+    } else
+        cd = (Cd *)STE_CTXPTR(ste);
+
+    return cd;
+}
+
+/*
+ * TR - Translation Request
+ * TT - Translated Tansaction
+ * OT - Other Transaction
+ */
+static IOMMUTLBEntry
+smmu_translate(MemoryRegion *mr, hwaddr addr, bool is_write)
+{
+
+    SMMUDevice *sdev = container_of(mr, SMMUDevice, mr);
+    SMMUState *s = sdev->smmu;
+    uint16_t sid = 0, config;
+    Ste ste;
+    Cd *cd;
+    int error = 0;
+
+    IOMMUTLBEntry ret = {
+        .target_as = &address_space_memory,
+        .iova = addr,
+        .translated_addr = addr,
+        .addr_mask = TARGET_PAGE_MASK,
+        .perm = IOMMU_NONE,
+    };
+
+    /* SMMU Bypass */
+    SMMU_DPRINTF(DEBUG, "1. SMMU Bypass check...\n");
+    /* We allow traffic through if SMMU is disabled */
+    if (!smmu_enabled(s)) {
+        SMMU_DPRINTF(CRIT, "SMMU Not enabled.. bypassing addr:%lx\n", addr);
+        goto bypass;
+    }
+
+    sid = smmu_get_sid(sdev->busnum, sdev->devfn);
+    SMMU_DPRINTF(CRIT, "SID:%x\n", sid);
+    SMMU_DPRINTF(INFO, "DONE (1)\n");
+
+    /* Fetch & Check STE */
+    error = smmu_find_ste(s, sid, &ste);
+    if (error)
+        goto error_out;  /* F_STE_FETCH or F_CFG_CONFLICT */
+
+    dump_ste(&ste);
+
+    if (is_ste_valid(s, &ste) && is_ste_bypass(s, &ste))
+        goto bypass;
+
+    if (!ste_valid_full(s, &ste)) {
+        error = SMMU_EVT_C_BAD_STE;
+        goto error_out;
+    }
+    SMMU_DPRINTF(INFO, "Valid STE Found\n");
+
+    /* Stream Bypass */
+    config = STE_CONFIG(&ste);
+    /*
+     * Mostly we have S1-Translate and S2-Bypass, Others will be
+     * implemented as we go
+     */
+    switch (config) {
+    case STE_CONFIG_S1BY_S2BY:  /* S1-bypass, S2-bypass */
+        goto bypass;
+
+    case STE_CONFIG_S1TR_S2TR:  /* S1-trans, S2-trans, assume S1-Only */
+        SMMU_DPRINTF(CRIT, "S1+S2 translation, not supported\n");
+        break;
+    case STE_CONFIG_S1TR_S2BY:        /* S1-Trans, S2-bypass */
+        cd = smmu_get_cd(s, &ste, 0); /* We dont have SSID, so 0 */
+        if (!is_cd_valid(s, &ste, cd)) {
+            error = SMMU_EVT_C_BAD_CD;
+            goto error_out;
+        }
+        break;
+    case STE_CONFIG_S1BY_S2TR:
+        SMMU_DPRINTF(CRIT, "S2-only translation, not supported right now\n");
+        goto out;
+        break;
+    default:
+        SMMU_DPRINTF(CRIT, "Unknown config field in STE\n");
+        goto out;
+    }
+    SMMU_DPRINTF(INFO, "DONE (3)\n");
+
+    /* Walk Stage1, if S2 is enabled, S2 walked for Every access on S1 */
+
+    SMMU_DPRINTF(INFO, "DONE (1)\n");
+
+    /* Walk Stage2 */
+
+error_out:
+    if (error) {        /* Post the Error using Event Q */
+        SMMU_DPRINTF(CRIT, "Translation Error: %x\n", error);
+        smmu_create_event(s, ret.iova, sid, is_write, error);
+        goto out;
+    }
+
+bypass:
+    /* After All check is done, we do allow Read/Write */
+    ret.perm = is_write ? IOMMU_WO: IOMMU_RO;
+
+out:
+
+    return ret;
+}
+
+static const MemoryRegionIOMMUOps smmu_ops = {
+    .translate = smmu_translate,
+};
+
+static AddressSpace *smmu_pci_iommu(PCIBus *pbus, void *opaque, int devfn)
+{
+    SMMUState *s = opaque;
+    SMMUDevice *sdev = &s->pbdev[PCI_SLOT(devfn)];
+
+    return &sdev->as;
+}
+
+
+static void smmu_init_iommu_as(SMMUSysState *sys)
+{
+    SMMUState *s = &sys->smmu_state;
+    PCIBus *pcibus = pci_find_primary_bus();
+    int i;
+
+    for (i = 0; i < PCI_SLOT_MAX; i++) {
+        SMMUDevice *sdev = &s->pbdev[i];
+        memory_region_init_iommu(&sdev->mr, OBJECT(sys),
+                                 &smmu_ops, "smmuv3", UINT64_MAX);
+
+        address_space_init(&sdev->as, &sdev->mr, "smmu-pci");
+    }
+
+    if (pcibus) {
+        SMMU_DPRINTF(INFO, "Found PCI bus, setting up iommu\n");
+        pci_setup_iommu(pcibus, smmu_pci_iommu, s);
+    } else
+        SMMU_DPRINTF(CRIT, "Could not find PCI root bus\n");
+
+}
+
 static int smmu_init(SysBusDevice *dev)
 {
     int i;
     SMMUSysState *sys = SMMU_SYS_DEV(dev);
     SMMUState *s = &sys->smmu_state;
-
-    HERE();
 
     /* Register Access */
     memory_region_init_io(&s->iomem, OBJECT(sys), &smmu_mem_ops,
@@ -587,7 +910,7 @@ static int smmu_init(SysBusDevice *dev)
     for (i = 0; i < ARRAY_SIZE(s->irq); i++)
         sysbus_init_irq(dev, &s->irq[i]);
 
-    HERE();
+    smmu_init_iommu_as(sys);
 
     return 0;
 }
