@@ -39,6 +39,7 @@
  */
 
 #define SMMU_NREGS       0x200
+#define PCI_DEVFN_MAX    32
 
 #define ARM_SMMU_DEBUG
 #ifdef ARM_SMMU_DEBUG
@@ -120,7 +121,7 @@ typedef struct SMMUState {
     MemoryRegion     iommu;
     AddressSpace     iommu_as;
 
-    SMMUDevice pbdev[PCI_SLOT_MAX];
+    SMMUDevice pbdev[PCI_DEVFN_MAX];
 } SMMUState;
 
 typedef struct SMMUSysState {
@@ -864,14 +865,31 @@ static const MemoryRegionIOMMUOps smmu_ops = {
     .translate = smmu_translate,
 };
 
-static AddressSpace *smmu_pci_iommu(PCIBus *pbus, void *opaque, int devfn)
+static AddressSpace *smmu_pci_iommu(PCIBus *bus, void *opaque, int devfn)
 {
     SMMUState *s = opaque;
     SMMUDevice *sdev = &s->pbdev[PCI_SLOT(devfn)];
-
+    HERE();
+    printf("=====> bus:%x devfn:%x\n", pci_bus_num(bus), devfn);
     return &sdev->as;
 }
 
+static AddressSpace *smmu_pci_iommu_new(PCIBus *bus, PCIBus *pbus,
+                                        void *opaque, int devfn)
+{
+    SMMUState *s = opaque;
+    SMMUDevice *sdev = &s->pbdev[devfn];
+
+    HERE();
+
+    sdev->smmu = s;
+    sdev->sid = (pci_bus_num(bus) << 8) | devfn;
+    sdev->devfn = devfn;
+    sdev->busnum = pci_bus_num(bus);
+    printf("=====> bus:%x devfn:%x\n", sdev->busnum, devfn);
+
+    return &sdev->as;
+}
 
 static void smmu_init_iommu_as(SMMUSysState *sys)
 {
@@ -879,7 +897,7 @@ static void smmu_init_iommu_as(SMMUSysState *sys)
     PCIBus *pcibus = pci_find_primary_bus();
     int i;
 
-    for (i = 0; i < PCI_SLOT_MAX; i++) {
+    for (i = 0; i < PCI_DEVFN_MAX; i++) {
         SMMUDevice *sdev = &s->pbdev[i];
         memory_region_init_iommu(&sdev->mr, OBJECT(sys),
                                  &smmu_ops, "smmuv3", UINT64_MAX);
@@ -888,11 +906,12 @@ static void smmu_init_iommu_as(SMMUSysState *sys)
     }
 
     if (pcibus) {
-        SMMU_DPRINTF(INFO, "Found PCI bus, setting up iommu\n");
+        SMMU_DPRINTF(CRIT, "Found PCI bus, setting up iommu\n");
+        pci_setup_iommu_new(pcibus, smmu_pci_iommu_new, s);
+    } else {
         pci_setup_iommu(pcibus, smmu_pci_iommu, s);
-    } else
         SMMU_DPRINTF(CRIT, "Could not find PCI root bus\n");
-
+    }
 }
 
 static int smmu_init(SysBusDevice *dev)

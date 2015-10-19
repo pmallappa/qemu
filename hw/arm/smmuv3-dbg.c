@@ -61,7 +61,7 @@ void dump_ste(Ste *ste)
     }
 
     pr_crit("***************STE**************\n"
-            "s1_ctx:%lx s1_fmt:%x config:%x valid:%x\n"
+            "s1_ctx:%#16lx s1_fmt:%#2x config:%#2x valid:%x\n"
             "strw:%x eats:%x s1_stalx:%x mev:%x ppar:%x cont:%x"
             "s1_cdmax:%x s1_csh:%x s1_cor:%x s1_cir:%x s1_dss:%x\n"
             "instcfg:%x privcfg:%x nscfg:%x shcfg:%x alloccfg:%x"
