@@ -69,7 +69,7 @@ static MemTxResult gicv3_its_trans_write(void *opaque, hwaddr offset,
     if (offset == 0x0040) {
         GICv3ITSState *s = ARM_GICV3_ITS_COMMON(opaque);
         GICv3ITSCommonClass *c = ARM_GICV3_ITS_COMMON_GET_CLASS(s);
-        int ret = c->send_msi(s, le32_to_cpu(value), attrs.stream_id);
+        int ret = c->send_msi(s, le32_to_cpu(value), attrs.requester_id);
 
         if (ret) {
             qemu_log_mask(LOG_GUEST_ERROR,
