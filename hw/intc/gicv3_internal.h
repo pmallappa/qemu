@@ -158,4 +158,23 @@ static inline bool gic_test_pending(GICv3State *s, int irq, uint64_t cm)
 #define GICC_CTLR_EOIMODE    (1U << 9)
 #define GICC_CTLR_EOIMODE_NS (1U << 10)
 
+#define NUM_CPU(s) ((s)->num_cpu)
+
+/* Return true if this GIC config has interrupt groups, which is
+ * true if we're a GICv3. Keep just
+ */
+static inline bool gic_has_groups(GICv3State *s)
+{
+    return 1;
+}
+
+#undef DEBUG_GICV3
+
+#ifdef DEBUG_GICV3
+#define DPRINTF(fmt, ...) \
+do { fprintf(stderr, "arm_gicv3::%s: " fmt , __func__, ## __VA_ARGS__); } while (0)
+#else
+#define DPRINTF(fmt, ...) do {} while(0)
+#endif
+
 #endif /* !QEMU_ARM_GIC_INTERNAL_H */
