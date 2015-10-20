@@ -351,19 +351,3 @@ const char *gicv3_class_name(void)
 
     exit(1);
 }
-
-const char *its_class_name(void)
-{
-    if (kvm_irqchip_in_kernel()) {
-#ifdef TARGET_AARCH64
-        /* KVM implementation requires this capability */
-        if (kvm_direct_msi_enabled()) {
-            return "arm-its-kvm";
-        }
-#endif
-        return NULL;
-    } else {
-        /* Software emulation is not implemented yet */
-        return NULL;
-    }
-}

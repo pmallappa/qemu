@@ -215,4 +215,14 @@ static inline const char *gic_class_name(void)
  */
 const char *gicv3_class_name(void);
 
+/**
+ * its_class_name
+ *
+ * Return name of ITS class to use depending on whether KVM acceleration is
+ * in use, or NULL if the chosen implementation is not available.
+ *
+ * Returns: class name to use or NULL
+ */
+const char *its_class_name(void);
+
 #endif
