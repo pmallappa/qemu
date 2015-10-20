@@ -18,6 +18,7 @@ common-obj-$(CONFIG_ARM_GIC) += arm_gicv3_cpu_interface.o
 common-obj-$(CONFIG_ARM_GIC) += arm_gicv3_dist.o
 common-obj-$(CONFIG_ARM_GIC) += arm_gicv3_redist.o
 common-obj-$(CONFIG_ARM_GIC) += arm_gicv3_spi_its.o
+common-obj-$(CONFIG_ARM_GIC) += arm_gicv3.o
 common-obj-$(CONFIG_OPENPIC) += openpic.o
 
 obj-$(CONFIG_APIC) += apic.o apic_common.o
