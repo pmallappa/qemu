@@ -160,6 +160,14 @@ static inline bool gic_test_pending(GICv3State *s, int irq, uint64_t cm)
 
 #define NUM_CPU(s) ((s)->num_cpu)
 
+static inline int gic_get_current_cpu(GICv3State *s)
+{
+    if (s->num_cpu > 1) {
+        return current_cpu->cpu_index;
+    }
+    return 0;
+}
+
 /* Return true if this GIC config has interrupt groups, which is
  * true if we're a GICv3. Keep just
  */
