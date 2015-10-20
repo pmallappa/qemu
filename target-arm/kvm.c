@@ -23,6 +23,7 @@
 #include "cpu.h"
 #include "internals.h"
 #include "hw/arm/arm.h"
+#include "hw/pci/pci.h"
 #include "exec/memattrs.h"
 
 const KVMCapabilityInfo kvm_arch_required_capabilities[] = {
@@ -30,6 +31,7 @@ const KVMCapabilityInfo kvm_arch_required_capabilities[] = {
 };
 
 static bool cap_has_mp_state;
+bool kvm_arm_msi_use_devid = 0;
 
 int kvm_arm_vcpu_init(CPUState *cs)
 {
@@ -607,6 +609,10 @@ int kvm_arm_vgic_probe(void)
 int kvm_arch_fixup_msi_route(struct kvm_irq_routing_entry *route,
                              uint64_t address, uint32_t data, PCIDevice *dev)
 {
+    if (kvm_arm_msi_use_devid) {
+        route->flags = KVM_MSI_VALID_DEVID;
+        route->u.msi.devid = pci_requester_id(dev);
+    }
     return 0;
 }
 
