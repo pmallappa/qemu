@@ -168,6 +168,12 @@ static inline bool gic_has_groups(GICv3State *s)
     return 1;
 }
 
+/* Cuurently no GICv2 backwards compatibility (no memory mapped regs)
+ * Uses system registers mode.
+ */
+extern const int gicv3_no_gicv2_bc;
+extern uint32_t gicv3_sre;
+
 #undef DEBUG_GICV3
 
 #ifdef DEBUG_GICV3
