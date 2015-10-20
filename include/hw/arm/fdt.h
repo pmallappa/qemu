@@ -30,5 +30,7 @@
 
 #define GIC_FDT_IRQ_PPI_CPU_START 8
 #define GIC_FDT_IRQ_PPI_CPU_WIDTH 8
+#define GICV3_FDT_IRQ_PPI_CPU_WIDTH 24
+
 
 #endif

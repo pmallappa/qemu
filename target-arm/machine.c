@@ -341,7 +341,12 @@ const char *gicv3_class_name(void)
 #endif
     } else {
         /* TODO: Software emulation is not implemented yet */
-        error_report("KVM is currently required for GICv3 emulation\n");
+#ifdef TARGET_AARCH64
+        return "arm_gicv3";
+#else
+        error_report("KVM GICv3 acceleration is not supported on this "
+                     "platform\n");
+#endif
     }
 
     exit(1);
