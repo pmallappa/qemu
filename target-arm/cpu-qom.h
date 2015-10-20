@@ -220,6 +220,7 @@ hwaddr arm_cpu_get_phys_page_debug(CPUState *cpu, vaddr addr);
 
 int arm_cpu_gdb_read_register(CPUState *cpu, uint8_t *buf, int reg);
 int arm_cpu_gdb_write_register(CPUState *cpu, uint8_t *buf, int reg);
+void aarch64_registers_with_opaque_set(Object *obj, void *opaque);
 
 /* Callback functions for the generic timer's timers. */
 void arm_gt_ptimer_cb(void *opaque);

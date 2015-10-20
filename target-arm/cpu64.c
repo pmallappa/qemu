@@ -45,6 +45,115 @@ static uint64_t a57_a53_l2ctlr_read(CPUARMState *env, const ARMCPRegInfo *ri)
 }
 #endif
 
+#ifndef CONFIG_USER_ONLY
+static void sgi_write(CPUARMState *env, const ARMCPRegInfo *ri, uint64_t value)
+{
+    CPUState *cpu = ENV_GET_CPU(env);
+    armv8_gicv3_set_sgi(ri->opaque, cpu->cpu_index, value);
+}
+
+static uint64_t iar_read(CPUARMState *env, const ARMCPRegInfo *ri)
+{
+    uint64_t value;
+    MemTxAttrs attrs;;
+    CPUState *cpu = ENV_GET_CPU(env);
+    attrs.secure = arm_is_secure_below_el3(env) ? 1 : 0;
+    value = armv8_gicv3_acknowledge_irq(ri->opaque, cpu->cpu_index, attrs);
+    return value;
+}
+
+static void sre_write(CPUARMState *env, const ARMCPRegInfo *ri, uint64_t value)
+{
+    armv8_gicv3_set_sre(ri->opaque, value);
+}
+
+static uint64_t sre_read(CPUARMState *env, const ARMCPRegInfo *ri)
+{
+    uint64_t value;
+    value = armv8_gicv3_get_sre(ri->opaque);
+    return value;
+}
+
+static void eoir_write(CPUARMState *env, const ARMCPRegInfo *ri, uint64_t value)
+{
+    MemTxAttrs attrs;
+    CPUState *cpu = ENV_GET_CPU(env);
+    attrs.secure = arm_is_secure_below_el3(env) ? 1 : 0;
+    armv8_gicv3_complete_irq(ri->opaque, cpu->cpu_index, value, attrs);
+}
+
+static uint64_t pmr_read(CPUARMState *env, const ARMCPRegInfo *ri)
+{
+    uint64_t value;
+    CPUState *cpu = ENV_GET_CPU(env);
+    value = armv8_gicv3_get_priority_mask(ri->opaque, cpu->cpu_index);
+    return value;
+}
+
+static void pmr_write(CPUARMState *env, const ARMCPRegInfo *ri, uint64_t value)
+{
+    CPUState *cpu = ENV_GET_CPU(env);
+    armv8_gicv3_set_priority_mask(ri->opaque, cpu->cpu_index, value);
+}
+
+static uint64_t igrpen1_read(CPUARMState *env, const ARMCPRegInfo *ri)
+{
+    uint64_t value;
+    CPUState *cpu = ENV_GET_CPU(env);
+    value = armv8_gicv3_get_igrpen1(ri->opaque, cpu->cpu_index);
+    return value;
+}
+
+static void igrpen1_write(CPUARMState *env, const ARMCPRegInfo *ri, uint64_t value)
+{
+    CPUState *cpu = ENV_GET_CPU(env);
+    armv8_gicv3_set_igrpen1(ri->opaque, cpu->cpu_index, value);
+}
+#endif
+
+static const ARMCPRegInfo cortex_a57_a53_cp_with_opaque_reginfo[] = {
+    { .name = "EIOR1_EL1", .state = ARM_CP_STATE_AA64,
+#ifndef CONFIG_USER_ONLY
+      .writefn = eoir_write,
+#endif
+      .opc0 = 3, .opc1 = 0, .crn = 12, .crm = 12, .opc2 = 1,
+      .access = PL1_W, .type = ARM_CP_SPECIAL, .resetvalue = 0 },
+    { .name = "IAR1_EL1", .state = ARM_CP_STATE_AA64,
+#ifndef CONFIG_USER_ONLY
+      .readfn = iar_read,
+#endif
+      .opc0 = 3, .opc1 = 0, .crn = 12, .crm = 12, .opc2 = 0,
+      .access = PL1_R, .type = ARM_CP_SPECIAL, .resetvalue = 0 },
+    { .name = "SGI1R_EL1", .state = ARM_CP_STATE_AA64,
+#ifndef CONFIG_USER_ONLY
+      .writefn = sgi_write,
+#endif
+      .opc0 = 3, .opc1 = 0, .crn = 12, .crm = 11, .opc2 = 5,
+      .access = PL1_RW, .type = ARM_CP_SPECIAL, .resetvalue = 0 },
+    { .name = "PMR_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 4, .crm = 6, .opc2 = 0,
+#ifndef CONFIG_USER_ONLY
+      .readfn = pmr_read, .writefn = pmr_write,
+#endif
+      .access = PL1_RW, .type = ARM_CP_SPECIAL, .resetvalue = 0 },
+    { .name = "CTLR_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 12, .crm = 12, .opc2 = 4,
+      .access = PL1_RW, .type = ARM_CP_SPECIAL, .resetvalue = 0 },
+    { .name = "SRE_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 12, .crm = 12, .opc2 = 5, .resetvalue = 0,
+#ifndef CONFIG_USER_ONLY
+      .readfn = sre_read, .writefn = sre_write,
+#endif
+      .access = PL1_RW, .type = ARM_CP_SPECIAL, .resetvalue = 0 },
+    { .name = "IGRPEN1_EL1", .state = ARM_CP_STATE_AA64,
+      .opc0 = 3, .opc1 = 0, .crn = 12, .crm = 12, .opc2 = 7,
+#ifndef CONFIG_USER_ONLY
+      .readfn = igrpen1_read, .writefn = igrpen1_write,
+#endif
+      .access = PL1_RW, .type = ARM_CP_SPECIAL, .resetvalue = 0 },
+    REGINFO_SENTINEL
+};
+
 static const ARMCPRegInfo cortex_a57_a53_cp_reginfo[] = {
 #ifndef CONFIG_USER_ONLY
     { .name = "L2CTLR_EL1", .state = ARM_CP_STATE_AA64,
@@ -256,6 +365,15 @@ static void aarch64_cpu_set_aarch64(Object *obj, bool value, Error **errp)
     } else {
         set_feature(&cpu->env, ARM_FEATURE_AARCH64);
     }
+}
+
+void aarch64_registers_with_opaque_set(Object *obj, void *opaque)
+{
+    ARMCPU *cpu = ARM_CPU(obj);
+
+    define_arm_cp_regs_with_opaque(cpu,
+                                   cortex_a57_a53_cp_with_opaque_reginfo,
+                                   opaque);
 }
 
 static void aarch64_cpu_initfn(Object *obj)
