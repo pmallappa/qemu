@@ -21,6 +21,7 @@ typedef struct PCIBusClass {
 struct PCIBus {
     BusState qbus;
     PCIIOMMUFunc iommu_fn;
+    PCIIOMMUFuncNew iommu_fn_new;
     void *iommu_opaque;
     uint8_t devfn_min;
     pci_set_irq_fn set_irq;

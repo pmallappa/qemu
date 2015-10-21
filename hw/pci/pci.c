@@ -1071,6 +1071,7 @@ static pcibus_t pci_bar_address(PCIDevice *d,
     MachineClass *mc = MACHINE_CLASS(oc);
     bool allow_0_address = mc->pci_allow_0_address;
 
+
     if (type & PCI_BASE_ADDRESS_SPACE_IO) {
         if (!(cmd & PCI_COMMAND_IO)) {
             return PCI_BAR_UNMAPPED;
@@ -1154,16 +1155,16 @@ static void pci_update_mappings(PCIDevice *d)
         /* now do the real mapping */
         if (r->addr != PCI_BAR_UNMAPPED) {
             trace_pci_update_mappings_del(d, pci_bus_num(d->bus),
-                                          PCI_SLOT(d->devfn),
                                           PCI_FUNC(d->devfn),
+                                          PCI_SLOT(d->devfn),
                                           i, r->addr, r->size);
             memory_region_del_subregion(r->address_space, r->memory);
         }
         r->addr = new_addr;
         if (r->addr != PCI_BAR_UNMAPPED) {
             trace_pci_update_mappings_add(d, pci_bus_num(d->bus),
-                                          PCI_SLOT(d->devfn),
                                           PCI_FUNC(d->devfn),
+                                          PCI_SLOT(d->devfn),
                                           i, r->addr, r->size);
             memory_region_add_subregion_overlap(r->address_space,
                                                 r->addr, r->memory, 1);
@@ -2071,6 +2072,7 @@ static void pci_add_option_rom(PCIDevice *pdev, bool is_default_rom,
         g_free(path);
         return;
     }
+
     size = pow2ceil(size);
 
     vmsd = qdev_get_vmsd(DEVICE(pdev));
