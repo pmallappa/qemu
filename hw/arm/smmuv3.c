@@ -472,6 +472,8 @@ static void smmu_write_mmio(void *opaque, hwaddr addr,
         break;
 
     case SMMU_REG_STRTAB_BASE:
+        printf("Writing strtab-base %lx\n", val);
+        s->strtab_base = val;
         is64 = true;
         break;
 
@@ -606,18 +608,21 @@ static int smmu_find_ste(SMMUState *s, uint16_t sid, Ste *ste)
         hwaddr stm_addr;
         STEDesc stm;
         int l1_ste_offset, l2_ste_offset;
-
-        if (sid > (1 << s->sid_split))
-            return SMMU_EVT_C_BAD_STE;
+        printf("SID:%x ~ %x\n", sid, s->sid_split);
 
         l1_ste_offset = sid >> s->sid_split;
-        l2_ste_offset = sid & ~(1 << s->sid_split);
+        l2_ste_offset = sid & __SMMU_MASK(s->sid_split);
 
-        stm_addr = (hwaddr)(s->strtab_base + l1_ste_offset * sizeof(STEDesc));
+        stm_addr = (hwaddr)(s->strtab_base + l1_ste_offset * sizeof(stm));
         smmu_read_sysmem(s, stm_addr, &stm, sizeof(stm));
 
-        span = STMSPAN(&stm);
+        printf("l1_ste_offset:%x l1desc:%x l1desc:%x l1(64):%lx\n"
+               "strtab_base:%lx stm_addr:%lx\n",
+               l1_ste_offset, stm.word[0], stm.word[1],
+               STM2U64(&stm), s->strtab_base, stm_addr);
 
+        span = STMSPAN(&stm);
+        printf("l2_ste_offset:%x ~ span:%x\n", l2_ste_offset, span);
         if (l2_ste_offset > span)
             return SMMU_EVT_C_BAD_STE;
 
@@ -742,7 +747,7 @@ ste_valid_full(SMMUState *s, Ste *ste)
 
 static uint16_t smmu_get_sid(int busnum, int devfn)
 {
-    return  ((busnum & 0xff) << 8) | (devfn & 0x7);
+    return  ((busnum & 0xff) << 8) | devfn;
 }
 
 static Cd *smmu_get_cd(SMMUState *s, Ste *ste, uint32_t ssid)
@@ -791,7 +796,6 @@ smmu_translate(MemoryRegion *mr, hwaddr addr, bool is_write)
 
     sid = smmu_get_sid(sdev->busnum, sdev->devfn);
     SMMU_DPRINTF(CRIT, "SID:%x\n", sid);
-    SMMU_DPRINTF(INFO, "DONE (1)\n");
 
     /* Fetch & Check STE */
     error = smmu_find_ste(s, sid, &ste);
@@ -869,11 +873,15 @@ static AddressSpace *smmu_pci_iommu(PCIBus *bus, void *opaque, int devfn)
 {
     SMMUState *s = opaque;
     SMMUDevice *sdev = &s->pbdev[PCI_SLOT(devfn)];
+    sdev->smmu = s;
+    sdev->sid = (pci_bus_num(bus) << 8) | devfn;
+    sdev->devfn = devfn;
     HERE();
+    SMMU_DPRINTF(DEBUG, "sdev:%p mr:%p s:%p\n", sdev, &sdev->mr, s);
     printf("=====> bus:%x devfn:%x\n", pci_bus_num(bus), devfn);
     return &sdev->as;
 }
-
+#if 0
 static AddressSpace *smmu_pci_iommu_new(PCIBus *bus, PCIBus *pbus,
                                         void *opaque, int devfn)
 {
@@ -890,6 +898,7 @@ static AddressSpace *smmu_pci_iommu_new(PCIBus *bus, PCIBus *pbus,
 
     return &sdev->as;
 }
+#endif
 
 static void smmu_init_iommu_as(SMMUSysState *sys)
 {
@@ -907,9 +916,9 @@ static void smmu_init_iommu_as(SMMUSysState *sys)
 
     if (pcibus) {
         SMMU_DPRINTF(CRIT, "Found PCI bus, setting up iommu\n");
-        pci_setup_iommu_new(pcibus, smmu_pci_iommu_new, s);
-    } else {
         pci_setup_iommu(pcibus, smmu_pci_iommu, s);
+    } else {
+        //pci_setup_iommu_new(pcibus, smmu_pci_iommu_new, s);
         SMMU_DPRINTF(CRIT, "Could not find PCI root bus\n");
     }
 }

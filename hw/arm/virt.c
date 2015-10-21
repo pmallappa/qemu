@@ -72,6 +72,7 @@ typedef struct VirtBoardInfo {
     uint32_t clock_phandle;
     uint32_t gic_phandle;
     uint32_t v2m_phandle;
+    uint8_t smmu_irqs;
 } VirtBoardInfo;
 
 typedef struct {
