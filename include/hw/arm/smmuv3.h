@@ -349,18 +349,29 @@ enum {
 #define _CD_FIELD(x, idx, start, len)        \
     extract32((x)->word[(idx)], start, len)
 
-#define CD_VALID(x)   _CD_FIELD((x), 0, 31, 1)
+#define CD_VALID(x)   _CD_FIELD((x), 0, 30, 1)
 #define CD_ASID(x)    _CD_FIELD((x), 1, 16, 16)
 #define CD_TTB(x, sel)                                                  \
     ({                                                                  \
-        uint64_t addr = _CD_FIELD((x), (sel)*2 + 2, 0, 16);           \
-        addr <<= 32;                                                    \
-        addr |= (uint64_t)_CD_FIELD((x), (sel)*2 + 3, 4, 28);         \
-        addr;                                                           \
+        uint64_t hi, lo;                                                \
+        hi = _CD_FIELD((x), (sel)*2 + 3, 0, 16);                        \
+        hi <<= 32;                                                      \
+        lo = (x)->word[(sel)*2+2]& ~0xf;                                \
+        hi | lo;                                                        \
     })
-#define CD_T0SZ(x)      _CD_FIELD((x), 0, 0, 6)
-#define CD_T1SZ(x)      _CD_FIELD((x), 0, 22, 6)
-#define CD_EPD0(x)      _CD_FIELD((x), 0, 14, 1)
+
+#define CD_TSZ(x, sel)   _CD_FIELD((x), 0, (16*(sel)) + 0, 6)
+#define CD_TG(x, sel)    _CD_FIELD((x), 0, (16*(sel)) + 6, 2)
+#define CD_EPD(x, sel)   _CD_FIELD((x), 0, (16*(sel)) + 14, 1)
+
+#define CD_T0SZ(x)      CD_TSZ((x), 0)
+#define CD_T1SZ(x)      CD_TSZ((x), 1)
+#define CD_TG0(x)       CD_TG((x), 0)
+#define CD_TG1(x)       CD_TG((x), 1)
+#define CD_EPD0(x)      CD_EPD((x), 0)
+#define CD_EPD1(x)      CD_EPD((x), 1)
+#define CD_IPS(x)       _CD_FIELD((x), 1, 0, 3)
+#define CD_AARCH64(x)   _CD_FIELD((x), 1, 9, 1)
 #define CD_TTB0(x)	CD_TTB((x), 0)
 #define CD_TTB1(x)	CD_TTB((x), 1)
 
@@ -413,7 +424,7 @@ enum {
     ({								\
         unsigned long addr;					\
         addr = (uint64_t)_STE_FIELD((x), 1, 0, 16) << 32;	\
-        addr |= (uint64_t)_STE_FIELD((x), 0, 4, 28);            \
+        addr |= (uint64_t)((x)->word[0] & 0xffffffc0);          \
         addr;							\
     })
 
@@ -421,10 +432,9 @@ enum {
     ({								\
         unsigned long addr;					\
         addr = (uint64_t)_STE_FIELD((x), 7, 0, 16) << 32;	\
-        addr |= (uint64_t)_STE_FIELD((x), 6, 4, 28);          \
+        addr |= (uint64_t)((x)->word[6] & 0xfffffff0);          \
         addr;							\
     })
-
 
 #define ARM_SMMU_FEAT_PASSID_SUPPORT	(1 << 24) /* Some random bits for now */
 #define ARM_SMMU_FEAT_CD_2LVL		(1 << 25)
@@ -456,6 +466,7 @@ typedef struct __smmu_data4	Pri; /* PRI entry */
 
 void dump_cmd(Cmd *);
 void dump_ste(Ste *);
+void dump_cd(Cd *);
 void dump_evt(Evt *);
 
 #endif

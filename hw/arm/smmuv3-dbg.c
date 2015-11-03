@@ -50,18 +50,144 @@
 #define STE_S2PTW(x)    _STE_FIELD((x), 5, 22, 1)
 #define STE_S2R(x)      _STE_FIELD((x), 5, 26, 1)
 
+
+typedef struct {
+    union {
+        struct {
+            uint64_t valid:1;
+            uint64_t config:3;
+            uint64_t s1fmt:2;
+            uint64_t s1ctxptr:42;
+            uint64_t rsrvd1:11;
+            uint64_t s1cdmax:5;
+        };
+        uint64_t d0;
+    };
+
+    union {
+        struct {
+            uint64_t s1dss:2;
+            uint64_t s1cir:2;
+            uint64_t s1cor:2;
+            uint64_t s1csh:2;
+            uint64_t rsrvd2:5;
+            uint64_t cont:4;
+            uint64_t rsrvd3:1;
+            uint64_t ppar:1;
+            uint64_t mev:1;
+            uint64_t sw:4;
+            uint64_t rsrvd4:3;
+            uint64_t s1stalld:1;
+            uint64_t eats:2;
+            uint64_t strw:2;
+            uint64_t memattr:4;
+            uint64_t mtcfg:1;
+            uint64_t alloccfg:4;
+            uint64_t rsrvd5:3;
+            uint64_t shcfg:2;
+            uint64_t nscfg:2;
+            uint64_t privcfg:2;
+            uint64_t instcfg:2;
+            uint64_t impdef:12;
+        };
+        uint64_t d1;
+    };
+
+    union {
+        struct {
+            uint64_t s2vmid:16;
+            uint64_t impdef2:16;
+            uint64_t s2t0sz:6;
+            uint64_t s2sl0:2;
+            uint64_t s2ir0:2;
+            uint64_t s2or0:2;
+            uint64_t s2sh0:2;
+            uint64_t s2tg:2;
+            uint64_t s2ps:3;
+            uint64_t s2aa64:1;
+            uint64_t s2endi:1;
+            uint64_t s2affd:1;
+            uint64_t s2ptw:1;
+            uint64_t s2hd:1;
+            uint64_t s2ha:1;
+            uint64_t s2s:1;
+            uint64_t s2r:1;
+            uint64_t rsrvd6:5;
+        };
+        uint64_t d2;
+    };
+
+    union {
+        struct {
+            uint64_t s2ttbr:48;
+            uint64_t rsrvd7:16;
+        };
+        uint64_t d3;
+    };
+
+    uint64_t unused[4];
+} Ste_struct;
+
+void new_dump_ste(Ste_struct *s);
+
+void new_dump_ste(Ste_struct *s)
+{
+    printf("***************NEW STE**************\n"
+           "s1_ctx:%#16lx s1_fmt:%#2x config:%#2x valid:%x\n"
+           "strw:%x eats:%x s1_stalx:%x mev:%x ppar:%x cont:%x"
+           "s1_cdmax:%x s1_csh:%x s1_cor:%x s1_cir:%x s1_dss:%x\n"
+           "instcfg:%x privcfg:%x nscfg:%x shcfg:%x alloccfg:%x"
+           "mtcft:%x memattr:%x\n s2vmid:%x\n"
+           "s2_s2r:%x s2_s2s:%x s2_ha:%x s2_hd:%x s2_ptw:%x s2_affd:%x\n"
+           "s2_endian:%x s2_aa64:%x s2_ps:%x s2_tg:%x s2_sh0:%x s2_or0:%x\n"
+           "s2_ir0:%x s2_sl0:%x s2t0sz:%x\n"
+           "s2_ttb:%lx\n"
+           "***************STE**************\n",
+           (uint64_t)s->s1ctxptr, s->s1fmt, s->config, s->valid, s->strw, s->eats,
+           s->s1stalld, s->mev, s->ppar, s->cont, s->s1cdmax, s->s1csh,
+           s->s1cor, s->s1cir, s->s1dss, s->instcfg, s->privcfg, s->nscfg,
+           s->shcfg, s->alloccfg, s->mtcfg, s->memattr, (unsigned)s->s2vmid,
+           s->s2r, s->s2s, s->s2ha, s->s2hd, s->s2ptw, s->s2affd, s->s2endi,
+           s->s2aa64, s->s2ps, s->s2tg, s->s2sh0, s->s2or0, s->s2ir0,
+           s->s2sl0, s->s2t0sz, (uint64_t)s->s2ttbr);
+}
+
+void dump_cd(Cd *cd)
+{
+
+    int i;
+
+    pr_crit("\n***************CD**************\n");
+    /* Print as 64-bit value, easy to read */
+    for (i = 0; i < ARRAY_SIZE(cd->word); i += 4) {
+        pr_crit("\t\tCD[%2d]: %#018lx\t CD[%2d]: %#018lx\n",
+                i/2, ((uint64_t)cd->word[i+1]) << 32 | cd->word[i],
+                i/2+1, ((uint64_t)cd->word[i+3]) << 32 | cd->word[i+2]);
+    }
+
+    pr_crit("valid:%x asid:%x t0sz:%x t1sz:%x tg0:%x tg1:%x epd0:%x epd1:%x\n"
+        "ips:%x aarch64:%x ttb0 :%#018lx ttb1: %#018lx\n"
+        "***************END CD**************\n",
+            CD_VALID(cd), CD_ASID(cd), CD_T0SZ(cd), CD_T1SZ(cd),
+            CD_TG0(cd), CD_TG1(cd), CD_EPD0(cd), CD_EPD1(cd),
+            CD_IPS(cd), CD_AARCH64(cd), CD_TTB0(cd), CD_TTB1(cd));
+
+}
+
+
 void dump_ste(Ste *ste)
 {
     int i;
 
-    for (i = 0; i < ARRAY_SIZE(ste->word); i++) {
-        pr_crit("STE[%2d]: %#010x\t STE[%2d]: %#010x\n",
-                i, ste->word[i], i+1, ste->word[i+1]);
-        i++;
+    pr_crit("\n***************STE**************\n");
+    /* Print as 64-bit value, easy to read */
+    for (i = 0; i < ARRAY_SIZE(ste->word); i += 4) {
+        pr_crit("STE[%2d]: %#016lx\t STE[%2d]: %#016lx\n",
+                i/2, ((uint64_t)ste->word[i+1]) << 32 | ste->word[i],
+                i/2+1, ((uint64_t)ste->word[i+3]) << 32 | ste->word[i+2]);
     }
 
-    pr_crit("***************STE**************\n"
-            "s1_ctx:%#16lx s1_fmt:%#2x config:%#2x valid:%x\n"
+    pr_crit("s1_ctx:%#016lx s1_fmt:%#2x config:%#2x valid:%x\n"
             "strw:%x eats:%x s1_stalx:%x mev:%x ppar:%x cont:%x"
             "s1_cdmax:%x s1_csh:%x s1_cor:%x s1_cir:%x s1_dss:%x\n"
             "instcfg:%x privcfg:%x nscfg:%x shcfg:%x alloccfg:%x"
@@ -70,7 +196,7 @@ void dump_ste(Ste *ste)
             "s2_endian:%x s2_aa64:%x s2_ps:%x s2_tg:%x s2_sh0:%x s2_or0:%x\n"
             "s2_ir0:%x s2_sl0:%x s2t0sz:%x\n"
             "s2_ttb:%lx\n"
-            "***************STE**************\n",
+            "***************END STE**************\n",
             STE_CTXPTR(ste), STE_S1FMT(ste), STE_CONFIG(ste),
             STE_VALID(ste), STE_STRW(ste), STE_EATS(ste),
             STE_S1STALLD(ste), STE_MEV(ste), STE_PPAR(ste),
