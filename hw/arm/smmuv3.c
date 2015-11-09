@@ -51,7 +51,7 @@ enum {SMMU_DBG_PANIC, SMMU_DBG_CRIT, SMMU_DBG_WARN, /* error level */
 
 #define DBG_BIT(bit)    (1 << SMMU_DBG_##bit)
 
-static uint32_t  dbg_bits = DBG_BIT(PANIC) | DBG_BIT(CRIT) | DBG_BIT(DEBUG);
+static uint32_t  dbg_bits = DBG_BIT(PANIC) | DBG_BIT(CRIT) | DBG_BIT(DEBUG) | DBG_BIT(TT_1);
 
 #define SMMU_DPRINTF(lvl, fmt, ...)     do {            \
         if (dbg_bits & DBG_BIT(lvl))                    \
@@ -106,7 +106,6 @@ typedef struct SMMUState {
 
     bool             virtual;
     bool             in_line;
-    uint32_t         dbg_mask;
 
     SMMUQueue cmdq, evtq;
 
@@ -304,6 +303,7 @@ static int smmu_cmdq_consume(SMMUState *s)
     SMMUQueue *q = &s->cmdq;
     uint64_t val = 0;
     uint32_t error = SMMU_CMD_ERR_NONE;
+    bool irq = false;
 
     while (!SMMU_CMDQ_ERR(s) && !smmu_is_q_empty(s, &s->cmdq)) {
         Cmd cmd;
@@ -326,6 +326,11 @@ static int smmu_cmdq_consume(SMMUState *s)
         case SMMU_CMD_TLBI_NH_ALL:
             break;
         case SMMU_CMD_SYNC:
+            switch (CMD_CS(&cmd)) {
+            case CMD_SYNC_SIG_IRQ:
+
+            default: break;
+            }
         case SMMU_CMD_PREFETCH_CONFIG:
             break;
         case SMMU_CMD_TLBI_NH_ASID:
@@ -360,7 +365,9 @@ out_while:
     SMMU_DPRINTF(DEBUG2, "prod_wrap:%d, prod:%x cons_wrap:%d cons:%x\n",
                  s->cmdq.wrap.prod, s->cmdq.prod,
                  s->cmdq.wrap.cons, s->cmdq.cons);
-
+    if (irq) {
+        qemu_irq_raise(s->irq[SMMU_IRQ_CMD_SYNC]);
+    }
     /* Update consumer pointer */
     smmu_write32_reg(s, SMMU_REG_CMDQ_CONS, val);
 
@@ -430,10 +437,7 @@ static void smmu_write_mmio(void *opaque, hwaddr addr,
     SMMU_DPRINTF(DEBUG2, "reg:%lx cur: %lx new: %lx\n", addr,
                  smmu_read_mmio(opaque, addr, size), val);
 
-    /*
-     * We update the ACK registers, actual write takes place after
-     * the switch-case
-     */
+    /* We update the ACK registers, actual write happens towards end */
 
     switch (addr) {
     case SMMU_REG_IRQ_CTRL:     /* Update the ACK as well */
@@ -459,18 +463,18 @@ static void smmu_write_mmio(void *opaque, hwaddr addr,
         break;
 
     case SMMU_REG_CMDQ_BASE:
-        is64 = true;
+        is64 = true;            /* fallthru */
     case SMMU_REG_CMDQ_PROD:
     case SMMU_REG_CMDQ_CONS:
         q = &s->cmdq;
-        update_queue = 1;
+        update_queue = true;
         break;
     case SMMU_REG_EVTQ_BASE:
         is64 = true;            /* fallthru */
     case SMMU_REG_EVTQ_CONS:
     case SMMU_REG_EVTQ_PROD:
         q = &s->evtq;
-        update_queue = 1;
+        update_queue = true;
         break;
 
     case SMMU_REG_STRTAB_BASE:
@@ -768,14 +772,16 @@ static int smmu_get_cd(SMMUState *s, Ste *ste, uint32_t ssid, Cd *cd)
 }
 
 typedef struct {
-    uint64_t va;
-    uint32_t s1oas, s2oas;
-    uint32_t s1tsz, s2tsz;
-    uint64_t s1ttbr, s2ttbr;
-    uint32_t s1granule, s2granule;
+    union {
+        hwaddr va;
+        hwaddr ipa;
+    };
+    uint32_t oas;
+    uint32_t tsz;
+    uint64_t ttbr;
+    uint32_t granule;
 } SMMUCfg;
 
-#if 0
 static int tg2granule(int bits, bool tg1)
 {
     int val = 12;
@@ -789,27 +795,82 @@ static int tg2granule(int bits, bool tg1)
 
     return val;
 }
-#endif
+
 /*
  * Heavily based on target-arm/helper.c get_phys_addr()
  * No need for violence, I surrender .....
  */
-static int smmu_get_phys_addr_s2(SMMUState *s, hwaddr ipa, hwaddr *opa,
+static int smmu_get_phys_addr_s2(SMMUState *s, hwaddr *opa,
                                  SMMUCfg *cfg, Ste *ste, Cd *cd, bool is_write)
 {
+    hwaddr ipa = cfg->ipa;
+    hwaddr addr = ipa;
+
+    *opa = addr;
     return 0;
 }
 
-static int smmu_get_phys_addr_s1(SMMUState *s, hwaddr va, hwaddr *ipa,
-                                 SMMUCfg *cfg, Ste *ste, Cd *cd, bool is_write)
+static int smmu_get_phys_addr_s1(SMMUState *s, hwaddr *ipa,
+                                 SMMUCfg cfg[], Ste *ste, Cd *cd, bool is_write)
 {
+    /*
+     * When the time comes, cfg[1] should be used to do additional
+     * stage2 translation for every level output in stage1
+     */
+    hwaddr va = cfg->va;
+    hwaddr addr = va, mask;
+    SMMUCfg *s1cfg = &cfg[0];
+    int level;
+    int granule_sz = tg2granule(s1cfg->granule, CD_EPD0(cd)) - 3;
+    int va_size = CD_AARCH64(cd)? 64: 32;
+    target_ulong page_size;
+
+    assert(va_size == 64);
+
+    level = 4 - (va_size - s1cfg->tsz - 4) / granule_sz;
+
+    mask = (1ULL << (granule_sz + 3)) - 1;
+
+    addr = extract64(s1cfg->ttbr, 0, 48);
+    addr &= ~((1ULL << (va_size - s1cfg->tsz - (granule_sz * (4 - level)))) - 1);
+
+    for (;;) {
+        uint64_t desc;
+
+        addr |= (va >> (granule_sz * (4 - level))) & mask;
+        addr &= ~7ULL;
+
+        if (smmu_read_sysmem(s, addr, &desc, sizeof(desc)))
+            SMMU_DPRINTF(CRIT, "Translation table read error level:%d\n", level);
+
+        SMMU_DPRINTF(TT_1, "Level: %d granule_sz:%d mask:%lx addr:%lx desc:%lx\n",
+                     level, granule_sz, mask, addr, desc);
+
+        if (!(desc & 1) ||
+            (!(desc & 2) & (level == 3))
+            goto badaddr;
+
+        addr = desc & 0xfffffff000ULL;
+        if ((desc & 2) && (level < 3)) {
+            level++;
+            continue;
+        }
+        page_size = (1ULL << ((granule_sz * (4 - level)) + 3));
+        addr |= (va & (page_size - 1));
+        break;
+    }
+    *ipa = addr;
 
     return 0;
+
+badaddr:
+    return -1;
 }
 
 static inline int oas2bits(int oas)
 {
     int ret = 48;
+
     switch (oas) {
     case 2: ret = 40; break;
     case 3: ret = 42; break;
@@ -823,12 +884,12 @@ static void smmu_cfg_populate_s2(Ste *ste, SMMUCfg *cfg)
 {                           /* stage 2 cfg */
     bool s2a64 = STE_S2AA64(ste);
 
-    cfg->s2granule = STE_S2TG(ste);
-    cfg->s2tsz = STE_S2T0SZ(ste);
-    cfg->s2ttbr = STE_S2TTB(ste);
+    cfg->granule = STE_S2TG(ste);
+    cfg->tsz = STE_S2T0SZ(ste);
+    cfg->ttbr = STE_S2TTB(ste);
     if (s2a64) {
-        cfg->s2tsz = MIN(cfg->s2tsz, 39);
-        cfg->s2tsz = MAX(cfg->s2tsz, 16);
+        cfg->tsz = MIN(cfg->tsz, 39);
+        cfg->tsz = MAX(cfg->tsz, 16);
     }
 }
 
@@ -836,12 +897,12 @@ static void smmu_cfg_populate_s1(Cd *cd, SMMUCfg *cfg)
 {                           /* stage 1 cfg */
     bool s1a64 = CD_AARCH64(cd);
 
-    cfg->s1granule = (CD_EPD0(cd))? CD_TG1(cd): CD_TG0(cd);
-    cfg->s1tsz = (CD_EPD0(cd))? CD_T1SZ(cd): CD_T0SZ(cd);
-    cfg->s1ttbr = (CD_EPD0(cd))? CD_TTB1(cd): CD_TTB0(cd);
+    cfg->granule = (CD_EPD0(cd))? CD_TG1(cd): CD_TG0(cd);
+    cfg->tsz = (CD_EPD0(cd))? CD_T1SZ(cd): CD_T0SZ(cd);
+    cfg->ttbr = (CD_EPD0(cd))? CD_TTB1(cd): CD_TTB0(cd);
     if (s1a64) {
-        cfg->s1tsz = MIN(cfg->s1tsz, 39);
-        cfg->s1tsz = MAX(cfg->s1tsz, 16);
+        cfg->tsz = MIN(cfg->tsz, 39);
+        cfg->tsz = MAX(cfg->tsz, 16);
     }
 }
 
@@ -857,7 +918,8 @@ static void smmu_cfg_populate_s1(Cd *cd, SMMUCfg *cfg)
 static int smmu_walk_pgtable(SMMUState *s, Ste *ste, Cd *cd,
                              IOMMUTLBEntry *tlbe, bool is_write)
 {
-    SMMUCfg cfg = {0,};
+    SMMUCfg cfg[2] = {{{0,}}};
+    SMMUCfg *s1cfg = &cfg[0], *s2cfg = &cfg[1];
     int retval = 0, result;
     uint32_t ste_cfg = STE_CONFIG(ste);
     hwaddr ipa, opa;          /* Input address, output address */
@@ -867,31 +929,34 @@ static int smmu_walk_pgtable(SMMUState *s, Ste *ste, Cd *cd,
     if (ste_cfg == STE_CONFIG_S1BY_S2BY)
         return 0;
 
-    cfg.va = tlbe->iova;
-    SMMU_DPRINTF(DEBUG, "Before Stage1 Input addr: %lx\n", cfg.va);
+    s1cfg->va = tlbe->iova;
 
-    smmu_cfg_populate_s1(cd, &cfg);
+    SMMU_DPRINTF(DEBUG, "Before Stage1 Input addr: %lx ste_config:%d\n",
+                 s1cfg->va, ste_cfg);
 
-    smmu_cfg_populate_s2(ste, &cfg);
+    smmu_cfg_populate_s1(cd, cfg);
 
-    cfg.s1oas = MIN(oas2bits(smmu_read32_reg(s, SMMU_REG_IDR5) & 0xf),
-                    oas2bits(CD_IPS(cd)));
+    smmu_cfg_populate_s2(ste, s2cfg);
 
-    /* FIX ttbr - make top bits zero*/
-    if (cfg.s1ttbr) cfg.s1ttbr &= ~(__SMMU_MASK(48 - cfg.s1oas));
-    if (cfg.s2ttbr) cfg.s2ttbr &= ~(__SMMU_MASK(48 - cfg.s2oas));
+    s1cfg->oas = MIN(oas2bits(smmu_read32_reg(s, SMMU_REG_IDR5) & 0xf),
+                     oas2bits(CD_IPS(cd)));
+
+    /* fix ttbr - make top bits zero*/
+    if (s1cfg->ttbr) s1cfg->ttbr &= ~(__SMMU_MASK(48 - s1cfg->oas));
+    if (s2cfg->ttbr) s2cfg->ttbr &= ~(__SMMU_MASK(48 - s2cfg->oas));
 
     if (ste_cfg == STE_CONFIG_S1TR_S2BY || ste_cfg == STE_CONFIG_S1TR_S2TR) {
-        result = smmu_get_phys_addr_s1(s, tlbe->iova, &ipa, &cfg, ste, cd, is_write);
+        result = smmu_get_phys_addr_s1(s, &ipa, cfg, ste, cd, is_write);
         if (result != 0)
-            SMMU_DPRINTF(CRIT, "FAILED Stage2 translation\n");
+            SMMU_DPRINTF(CRIT, "FAILED Stage1 translation\n");
     }
-    opa = ipa;
 
-    SMMU_DPRINTF(DEBUG, "DONE: Stage1 tanslated :%lx\n ", opa);
+    s2cfg->ipa = ipa;
+
+    SMMU_DPRINTF(DEBUG, "DONE: Stage1 tanslated :%lx\n ", ipa);
 
     if (ste_cfg == STE_CONFIG_S1BY_S2TR || ste_cfg == STE_CONFIG_S1TR_S2TR) {
-        result = smmu_get_phys_addr_s2(s, ipa, &opa, &cfg, ste, cd, is_write);
+        result = smmu_get_phys_addr_s2(s, &opa, s2cfg, ste, cd, is_write);
         if (result != 0)
             SMMU_DPRINTF(CRIT, "FAILED Stage2 translation\n");
     }
@@ -1004,7 +1069,6 @@ bypass:
     ret.perm = is_write ? IOMMU_WO: IOMMU_RO;
 
 out:
-
     return ret;
 }
 
@@ -1070,10 +1134,6 @@ static void smmu_reset(DeviceState *dev)
     SMMUSysState *sys = SMMU_SYS_DEV(dev);
     SMMUState *s = &sys->smmu_state;
 
-    HERE();
-    if (s->dbg_mask)
-        dbg_bits |= s->dbg_mask;
-
     _smmu_populate_regs(s);
     //_smmu_configure(s);
 }
@@ -1082,7 +1142,6 @@ static void smmu_reset(DeviceState *dev)
 static Property smmu_properties[] = {
     DEFINE_PROP_BOOL("inline", SMMUState, in_line, true),
     DEFINE_PROP_BOOL("virtual", SMMUState, virtual, true),
-    DEFINE_PROP_UINT32("dbg_mask", SMMUState, dbg_mask, true),
     DEFINE_PROP_END_OF_LIST(),
 };
 

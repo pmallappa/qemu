@@ -168,6 +168,11 @@ enum {
     SMMU_CMD_PRI_RESP_SUCCESS,
 };
 
+enum {
+    CMD_SYNC_SIG_NONE,
+    CMD_SYNC_SIG_IRQ,
+    CMD_SYNC_SIG_SEV,
+};
 
 #define __SET_FLD(var, mask, shift, val)        \
     ({ var |= ((val) & (mask)) << (shift); })
@@ -186,6 +191,7 @@ enum {
 #define CMD_SEV(x)   __CMD_GET_FLD((x), 0, 10, 1)
 #define CMD_AC(x)    __CMD_GET_FLD((x), 0, 12, 1)
 #define CMD_AB(x)    __CMD_GET_FLD((x), 0, 13, 1)
+#define CMD_CS(x)    __CMD_GET_FLD((x), 0, 12, 2)
 #define CMD_SSID(x)  __CMD_GET_FLD((x), 0, 16, 16)
 #define CMD_SID(x)   ((x)->word[1])
 #define CMD_VMID(x)  __CMD_GET_FLD((x), 1, 0, 16)
