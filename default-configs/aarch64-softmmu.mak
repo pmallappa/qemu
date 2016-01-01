@@ -4,3 +4,4 @@
 include arm-softmmu.mak
 
 CONFIG_XLNX_ZYNQMP=y
+CONFIG_ARM_SMMUV3=y
