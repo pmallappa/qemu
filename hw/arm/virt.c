@@ -53,6 +53,7 @@
 #include "hw/smbios/smbios.h"
 #include "qapi/visitor.h"
 #include "standard-headers/linux/input.h"
+#include "hw/arm/smmuv3.h"
 
 /* Number of external interrupt lines to configure the GIC with */
 #define NUM_IRQS 256
@@ -72,6 +73,7 @@ typedef struct VirtBoardInfo {
     uint32_t clock_phandle;
     uint32_t gic_phandle;
     uint32_t v2m_phandle;
+    uint8_t smmu;
 } VirtBoardInfo;
 
 typedef struct {
@@ -84,6 +86,7 @@ typedef struct {
     bool secure;
     bool highmem;
     int32_t gic_version;
+    uint8_t smmu;
 } VirtMachineState;
 
 #define TYPE_VIRT_MACHINE   MACHINE_TYPE_NAME("virt")
@@ -122,6 +125,7 @@ static const MemMapEntry a15memmap[] = {
     [VIRT_RTC] =                { 0x09010000, 0x00001000 },
     [VIRT_FW_CFG] =             { 0x09020000, 0x00000018 },
     [VIRT_GPIO] =               { 0x09030000, 0x00001000 },
+    [VIRT_SMMU] =               { 0x09040000, 0x00020000 }, /* 128K, necessary */
     [VIRT_MMIO] =               { 0x0a000000, 0x00000200 },
     /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
     [VIRT_PLATFORM_BUS] =       { 0x0c000000, 0x02000000 },
@@ -141,6 +145,16 @@ static const int a15irqmap[] = {
     [VIRT_MMIO] = 16, /* ...to 16 + NUM_VIRTIO_TRANSPORTS - 1 */
     [VIRT_GIC_V2M] = 48, /* ...to 48 + NUM_GICV2M_SPIS - 1 */
     [VIRT_PLATFORM_BUS] = 112, /* ...to 112 + PLATFORM_BUS_NUM_IRQS -1 */
+};
+
+static const struct smmuirq {
+    const char *name;
+    int irq;
+} smmuirqmap[] = {
+    [SMMU_IRQ_EVTQ]= {"eventq", 74},
+    [SMMU_IRQ_PRIQ]= {"priq", 75},
+    [SMMU_IRQ_CMD_SYNC]= {"cmdq-sync", 77},
+    [SMMU_IRQ_GERROR]= {"gerror", 79},
 };
 
 static VirtBoardInfo machines[] = {
@@ -787,8 +801,60 @@ static void create_pcie_irq_map(const VirtBoardInfo *vbi, uint32_t gic_phandle,
                            0x7           /* PCI irq */);
 }
 
+static void create_smmu(const VirtBoardInfo *vbi, qemu_irq *pic)
+{
+    hwaddr base = vbi->memmap[VIRT_SMMU].base;
+    
+    if (vbi->smmu == SMMU_IMPL_BRCM)
+        sysbus_create_simple("smmuv3-brcm", base, pic[smmuirqmap[0].irq]);
+    else
+        sysbus_create_varargs("smmuv3", base,
+                              pic[smmuirqmap[0].irq],
+                              pic[smmuirqmap[1].irq],
+                              pic[smmuirqmap[2].irq],
+                              pic[smmuirqmap[3].irq], NULL);
+}
+
+static uint32_t create_smmu_fdt(const VirtBoardInfo *vbi,
+                                qemu_irq *pic)
+{
+    int i;
+    char *smmu;
+    int nirqs = (vbi->smmu == SMMU_IMPL_BRCM)? 1: ARRAY_SIZE(smmuirqmap);
+    uint32_t ph;
+    const char compat[] = "arm,smmu-v3";
+    hwaddr base = vbi->memmap[VIRT_SMMU].base;
+    hwaddr size = vbi->memmap[VIRT_SMMU].size;
+    int type = GIC_FDT_IRQ_TYPE_SPI;
+
+    ph = qemu_fdt_alloc_phandle(vbi->fdt);
+    smmu = g_strdup_printf("/smmuv3@%" PRIx64, base);
+    qemu_fdt_add_subnode(vbi->fdt, smmu);
+    qemu_fdt_setprop(vbi->fdt, smmu, "compatible", compat, sizeof(compat));
+    qemu_fdt_setprop_sized_cells(vbi->fdt, smmu, "reg",
+                                 2, base, 2, size);
+
+    for (i = 0; i < nirqs; i++) {
+        qemu_fdt_appendprop_cells(vbi->fdt, smmu, "interrupts",
+                                  type, smmuirqmap[i].irq,
+                                  GIC_FDT_IRQ_FLAGS_LEVEL_HI);
+        qemu_fdt_appendprop_string(vbi->fdt, smmu, "interrupt-names",
+                                   vbi->smmu == SMMU_IMPL_BRCM ?
+                                   "gerror": smmuirqmap[i].name);
+    }
+
+    qemu_fdt_setprop_cell(vbi->fdt, smmu, "clocks", vbi->clock_phandle);
+    qemu_fdt_setprop_cell(vbi->fdt, smmu, "#iommu-cells", 0);
+    qemu_fdt_setprop_string(vbi->fdt, smmu, "clock-names", "apb_pclk");
+
+    qemu_fdt_setprop_cell(vbi->fdt, smmu, "phandle", ph);
+    g_free(smmu);
+
+    return ph;
+}
+
 static void create_pcie(const VirtBoardInfo *vbi, qemu_irq *pic,
-                        bool use_highmem)
+                        bool use_highmem, uint32_t smmu_ph)
 {
     hwaddr base_mmio = vbi->memmap[VIRT_PCIE_MMIO].base;
     hwaddr size_mmio = vbi->memmap[VIRT_PCIE_MMIO].size;
@@ -883,6 +949,7 @@ static void create_pcie(const VirtBoardInfo *vbi, qemu_irq *pic,
     }
 
     qemu_fdt_setprop_cell(vbi->fdt, nodename, "#interrupt-cells", 1);
+    qemu_fdt_setprop_cells(vbi->fdt, nodename, "iommus", smmu_ph);
     create_pcie_irq_map(vbi, vbi->gic_phandle, irq, nodename);
 
     g_free(nodename);
@@ -988,6 +1055,7 @@ static void machvirt_init(MachineState *machine)
     VirtGuestInfoState *guest_info_state = g_malloc0(sizeof *guest_info_state);
     VirtGuestInfo *guest_info = &guest_info_state->info;
     char **cpustr;
+    uint32_t smmu_ph;
 
     if (!cpu_model) {
         cpu_model = "cortex-a15";
@@ -1037,6 +1105,8 @@ static void machvirt_init(MachineState *machine)
         error_report("mach-virt: cannot model more than 30GB RAM");
         exit(1);
     }
+
+    vbi->smmu = vms->smmu;
 
     create_fdt(vbi);
 
@@ -1097,7 +1167,11 @@ static void machvirt_init(MachineState *machine)
 
     create_rtc(vbi, pic);
 
-    create_pcie(vbi, pic, vms->highmem);
+    smmu_ph = create_smmu_fdt(vbi, pic);
+
+    create_pcie(vbi, pic, vms->highmem, smmu_ph);
+
+    create_smmu(vbi, pic);
 
     create_gpio(vbi, pic);
 
@@ -1192,6 +1266,54 @@ static void virt_set_gic_version(Object *obj, const char *value, Error **errp)
     }
 }
 
+struct {
+    uint8_t version;
+    char    name[32];
+    char    impl[32];
+    uint8_t type;
+} smmu_info[] = {
+    {3, TYPE_SMMU_BRCM_DEV, "Broadcom", SMMU_IMPL_BRCM},
+    {3, TYPE_SMMU_DEV, "ARM", SMMU_IMPL_ARM},
+    {0},
+};
+
+static void virt_get_smmu_version(Object *obj, Visitor *v,
+                                  void *opaque, const char *name,
+                                  Error **errp)
+{
+    VirtMachineState *vms = VIRT_MACHINE(obj);
+    char val[512];
+    int i, size = ARRAY_SIZE(val), n = 0;
+    
+    for (i = 0; i < ARRAY_SIZE(smmu_info); i++) {
+        if (smmu_info[i].type == 0)
+            break;
+        n += snprintf(val, size-n, "%d - %s\n", i, smmu_info[i].name);
+    }
+    val[size - 1] = '\0';
+
+    error_setg(errp, "%s", val);
+}
+
+static void virt_set_smmu_version(Object *obj, Visitor *v,
+                                  void *opaque, const char *name,
+                                  Error **errp)
+{
+    int size = ARRAY_SIZE(smmu_info);
+    Error *local_err = NULL;
+    uint8_t value;
+
+    visit_type_uint8(v, &value, name, &local_err);
+    if (local_err || value > size) {
+        goto out;
+    }
+
+    return;
+
+out:
+    error_propagate(errp, local_err);
+}
+
 static void virt_instance_init(Object *obj)
 {
     VirtMachineState *vms = VIRT_MACHINE(obj);
@@ -1223,6 +1345,14 @@ static void virt_instance_init(Object *obj)
     object_property_set_description(obj, "gic-version",
                                     "Set GIC version. "
                                     "Valid values are 2, 3 and host", NULL);
+
+    vms->smmu = SMMU_IMPL_BRCM;
+    object_property_add(obj, "smmu", "uint8", virt_get_smmu_version,
+                        virt_set_smmu_version, NULL, NULL, NULL);
+    object_property_set_description(obj, "smmu",
+                                    "Version and implementation "
+                                    "1 - ARM version, 2 - Broadcom Version",
+                                    NULL);
 }
 
 static void virt_class_init(ObjectClass *oc, void *data)
