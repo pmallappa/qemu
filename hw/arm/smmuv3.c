@@ -25,7 +25,9 @@
  * - Works with SMMUv3 driver in Linux 4.5
  * - Save/Restore not yet supported
  */
-
+#include "qemu/osdep.h"
+#include "hw/boards.h"
+#include "sysemu/sysemu.h"
 #include "hw/sysbus.h"
 #include "hw/pci/pci.h"
 #include "exec/address-spaces.h"
@@ -36,12 +38,13 @@
 #define ARM_SMMU_DEBUG
 #ifdef ARM_SMMU_DEBUG
 
-enum {SMMU_DBG_PANIC, SMMU_DBG_CRIT, SMMU_DBG_WARN, /* error level */
-      SMMU_DBG_DBG1, SMMU_DBG_DBG2, SMMU_DBG_INFO, /* info level */
-      SMMU_DBG_CMDQ,                /* Just command queue */
-      SMMU_DBG_STE, SMMU_DBG_CD,    /* Specific parts STE/CD */
-      SMMU_DBG_TT_1, SMMU_DBG_TT_2, /* Translation Stage 1/2 */
-      SMMU_DBG_IRQ,                 /* IRQ  */
+enum {
+    SMMU_DBG_PANIC, SMMU_DBG_CRIT, SMMU_DBG_WARN, /* error level */
+    SMMU_DBG_DBG1, SMMU_DBG_DBG2, SMMU_DBG_INFO, /* info level */
+    SMMU_DBG_CMDQ,                               /* Just command queue */
+    SMMU_DBG_STE, SMMU_DBG_CD,                   /* Specific parts STE/CD */
+    SMMU_DBG_TT_1, SMMU_DBG_TT_2,                /* Translation Stage 1/2 */
+    SMMU_DBG_IRQ,                                /* IRQ  */
 };
 
 #define DBG_BIT(bit)    (1 << SMMU_DBG_##bit)
