@@ -25,6 +25,8 @@
  * - Works with SMMUv3 driver in Linux 4.5
  * - Save/Restore not yet supported
  */
+#define NODEBUG
+
 #include "qemu/osdep.h"
 #include "hw/boards.h"
 #include "sysemu/sysemu.h"
@@ -106,8 +108,8 @@ typedef struct SMMUDevice {
     void             *smmu;
     PCIBus           *bus;
     int              devfn;
-    MemoryRegion     mr;
-    AddressSpace     as;
+    MemoryRegion     iommu;
+    AddressSpace     *as;
 } SMMUDevice;
 
 typedef struct SMMUInfo {
@@ -128,7 +130,7 @@ typedef struct SMMUState {
     SMMUQueue     cmdq, evtq;
 
 #define SMMU_FEATURE_2LVL_STE (1<<0)
-    struct {                    /* Group may move to different struct */
+    struct {                    /* Group; may move to different struct */
         uint32_t  features;
         uint16_t  sid_size;
         uint16_t  sid_split;
@@ -136,9 +138,10 @@ typedef struct SMMUState {
     };
     /* Register space */
     MemoryRegion  iomem;
+
     /* IOMMU Address space */
-    MemoryRegion  iommu;
-    AddressSpace  iommu_as;
+    MemoryRegion iommu;
+    AddressSpace iommu_as;
 
     SMMUDevice    pbdev[PCI_DEVFN_MAX];
 } SMMUState;
@@ -836,7 +839,7 @@ static IOMMUTLBEntry
 smmu_translate(MemoryRegion *mr, hwaddr addr, bool is_write)
 {
 
-    SMMUDevice *sdev = container_of(mr, SMMUDevice, mr);
+    SMMUDevice *sdev = container_of(mr, SMMUDevice, iommu);
     SMMUState *s = sdev->smmu;
     uint16_t sid = 0, config;
     Ste ste;
@@ -934,7 +937,7 @@ out:
     return ret;
 }
 
-static const MemoryRegionIOMMUOps smmu_ops = {
+static const MemoryRegionIOMMUOps smmu_iommu_ops = {
     .translate = smmu_translate,
 };
 
@@ -1317,13 +1320,24 @@ static AddressSpace *smmu_pci_iommu(PCIBus *bus, void *opaque, int devfn)
     sdev->smmu = s;
     sdev->bus = bus;
     sdev->devfn = devfn;
+    //sdev->as = &s->iommu_as;
 
-    memory_region_init_iommu(&sdev->mr, OBJECT(sys),
-                             &smmu_ops, "smmuv3", UINT64_MAX);
+    memory_region_init_iommu(&sdev->iommu, OBJECT(sys),
+                             &smmu_iommu_ops, "smmuv3", UINT64_MAX);
 
-    address_space_init(&sdev->as, &sdev->mr, "smmu-pci");
+#if 0
+    if (!s->mr)
+        s->as = &address_space_memory;
+    else
+#endif
 
-    return &sdev->as;
+        sdev->as = address_space_init_shareable(&sdev->iommu, "smmu-as");
+    printf("returened as %p\n", sdev->as);
+
+    assert(sdev->as);
+
+    // address_space_init(&sdev->as, &sdev->mr, "smmu-pci");
+    return sdev->as;
 }
 
 static void smmu_init_iommu_as(SMMUSysState *sys)
@@ -1333,7 +1347,13 @@ static void smmu_init_iommu_as(SMMUSysState *sys)
 
     if (pcibus) {
         SMMU_DPRINTF(CRIT, "Found PCI bus, setting up iommu\n");
+        memory_region_init_iommu(&s->iommu, OBJECT(sys),
+                                 &smmu_iommu_ops, "smmuv3-root", UINT64_MAX);
+
+        address_space_init(&s->iommu_as, &s->iommu, "smmu-as");
+
         pci_setup_iommu(pcibus, smmu_pci_iommu, s);
+
     } else {
         SMMU_DPRINTF(CRIT, "Could'nt find PCI bus, SMMU is not registered\n");
     }
@@ -1450,9 +1470,17 @@ static void smmu_reset(DeviceState *dev)
 {
     SMMUSysState *sys = SMMU_SYS_DEV(dev);
     SMMUState *s = &sys->smmu_state;
-
+    printf("smmu_reset: %p\n", sys);
     smmu_populate_regs(s);
 }
+
+#if 0
+static void smmu_realize(DeviceState *dev, Error **errp)
+{
+    SMMUSysState *sys = SMMU_SYS_DEV(dev);
+    printf("smmu_realize: %p\n", sys);
+}
+#endif
 
 /*
  * DUMMY: Will get to this one day
@@ -1481,6 +1509,7 @@ static void smmu_class_init(ObjectClass *klass, void *data)
     dc->desc = info->desc;
     dc->reset = smmu_reset;
     dc->vmsd = &vmstate_smmu;
+    //dc->realize = smmu_realize;
 }
 
 static void smmu_instance_init(Object *obj)
