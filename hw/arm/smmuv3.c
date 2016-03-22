@@ -109,7 +109,7 @@ typedef struct SMMUDevice {
     PCIBus           *bus;
     int              devfn;
     MemoryRegion     iommu;
-    AddressSpace     *as;
+    AddressSpace     as;
 } SMMUDevice;
 
 typedef struct SMMUInfo {
@@ -1325,19 +1325,13 @@ static AddressSpace *smmu_pci_iommu(PCIBus *bus, void *opaque, int devfn)
     memory_region_init_iommu(&sdev->iommu, OBJECT(sys),
                              &smmu_iommu_ops, "smmuv3", UINT64_MAX);
 
-#if 0
-    if (!s->mr)
-        s->as = &address_space_memory;
-    else
-#endif
+    address_space_init(&sdev->as, &sdev->iommu, "smmu-as");
+    //printf("returened as %p\n", sdev->as);
 
-        sdev->as = address_space_init_shareable(&sdev->iommu, "smmu-as");
-    printf("returened as %p\n", sdev->as);
-
-    assert(sdev->as);
+    //assert(sdev->as);
 
     // address_space_init(&sdev->as, &sdev->mr, "smmu-pci");
-    return sdev->as;
+    return &sdev->as;
 }
 
 static void smmu_init_iommu_as(SMMUSysState *sys)
@@ -1347,10 +1341,10 @@ static void smmu_init_iommu_as(SMMUSysState *sys)
 
     if (pcibus) {
         SMMU_DPRINTF(CRIT, "Found PCI bus, setting up iommu\n");
-        memory_region_init_iommu(&s->iommu, OBJECT(sys),
-                                 &smmu_iommu_ops, "smmuv3-root", UINT64_MAX);
+        //memory_region_init_iommu(&s->iommu, OBJECT(sys),
+        //&smmu_iommu_ops, "smmuv3-root", UINT64_MAX);
 
-        address_space_init(&s->iommu_as, &s->iommu, "smmu-as");
+        //address_space_init(&s->iommu_as, &s->iommu, "smmu-as");
 
         pci_setup_iommu(pcibus, smmu_pci_iommu, s);
 
