@@ -55,7 +55,7 @@
 #include "hw/smbios/smbios.h"
 #include "qapi/visitor.h"
 #include "standard-headers/linux/input.h"
-#include "hw/arm/smmuv3.h"
+#include "hw/arm/smmu.h"
 
 /* Number of external interrupt lines to configure the GIC with */
 #define NUM_IRQS 256
