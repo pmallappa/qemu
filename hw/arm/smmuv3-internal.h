@@ -21,6 +21,8 @@
 #ifndef HW_ARM_SMMU_V3_INTERNAL_H
 #define HW_ARM_SMMU_V3_INTERNAL_H
 
+//#include "smmu-common.h"
+
 /*****************************
  * MMIO Register
  *****************************/
@@ -339,5 +341,32 @@ typedef struct __smmu_data4  Pri; /* PRI entry */
 #define SMMU_INTR_EVENT    (1 << 2) /* high till EventQ.PROD != EventQ.CONS */
 #define SMMU_INTR_PRI      (1 << 1) /* PriQ. high till PriQ.PROD != PriQ.CONS */
 #define SMMU_INTR_GERROR   (1 << 0) /* cleared when  GERRORN is written */
+
+/*****************************
+ * QEMu related 
+ *****************************/
+
+typedef struct {
+    SMMUBaseClass smmu_base_class;
+} SMMUV3Class;
+
+#define SMMU_DEVICE_CLASS(klass)                                    \
+    OBJECT_CLASS_CHECK(SMMUBaseClass, (klass), TYPE_SMMU_DEV_BASE)
+
+#define SMMU_V3_DEVICE_GET_CLASS(obj)                              \
+    OBJECT_GET_CLASS(SMMUBaseClass, (obj), TYPE_SMMU_V3_DEV)
+
+#define ARM_SMMU_DEBUG
+#ifdef ARM_SMMU_DEBUG
+void dump_ste(Ste *ste);
+void dump_cd(Cd *cd);
+void dump_evt(Evt *e);
+void dump_cmd(Cmd *cmd);
+#else
+#define dump_ste(...) do {} while (0)
+#define dump_cd(...) do {} while (0)
+#define dump_evt(...) do {} while (0)
+#define dump_cmd(...) do {} while (0)
+#endif
 
 #endif
