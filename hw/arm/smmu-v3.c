@@ -78,6 +78,7 @@ struct SMMUDevice {
     int           devfn;
     MemoryRegion  iommu;
     AddressSpace  as;
+    AddressSpace  *asp;
 };
 
 typedef struct SMMUV3State SMMUV3State;
@@ -96,7 +97,7 @@ struct SMMUV3State {
 
     qemu_irq      irq[4];
 
-    SMMUQueue     cmdq, evtq;
+    SMMUQueue     cmdq, evtq, priq;
 
     /* IOMMU Address space */
     MemoryRegion  iommu;
@@ -436,17 +437,14 @@ check_cmdq:
 static void __smmu_update_q(SMMUV3State *s, SMMUQueue *q, uint64_t val,
                             uint64_t addr)
 {
-    printf("Here in %s\n", __func__);
     switch (addr) {
     case SMMU_REG_CMDQ_BASE:
     case SMMU_REG_EVTQ_BASE:
         q->shift = val & 0x1f;
         q->entries = 1 << (q->shift);
-        printf("q->shift:%d\n", q->shift);
         break;
     case SMMU_REG_CMDQ_PROD:
     case SMMU_REG_EVTQ_PROD:
-        printf("q->prod:%d val:%ld\n", q->prod, val);
         q->prod = Q_IDX(q, val);
         q->wrap.prod = val >> q->shift;
         break;
@@ -460,7 +458,6 @@ static void __smmu_update_q(SMMUV3State *s, SMMUQueue *q, uint64_t val,
     if (addr == SMMU_REG_CMDQ_PROD) { /* possibly new command present */
         smmu_update(s);
     }
-
 }
 
 static void smmu_update_q(RegInfo *r, uint64_t addr, uint64_t val,
@@ -471,7 +468,6 @@ static void smmu_update_q(RegInfo *r, uint64_t addr, uint64_t val,
 
     switch (addr) {
     case SMMU_REG_CMDQ_BASE ... SMMU_REG_CMDQ_CONS:
-        printf("here with cmdq_base ... cons\n");
         q = &s->cmdq;
         break;
     case SMMU_REG_EVTQ_BASE ... SMMU_REG_EVTQ_IRQ_CFG2:
@@ -525,6 +521,10 @@ static void smmu_update_base(RegInfo *r, uint64_t addr, uint64_t val,
         q = &s->cmdq;
         base = &s->cmdq.base;
         break;
+    case SMMU_REG_PRIQ_BASE:
+        q = &s->priq;
+        base = &s->priq.base;
+        break;
     }
 
     /* BIT[62], BIT[5:0] are ignored */
@@ -543,90 +543,43 @@ static void smmuv3_reg_update_cr0(RegInfo *r, uint64_t addr, uint64_t val,
     smmu_update(s);                             /* Start processing if enabled */
 }
 
+static void smmuv3_reg_update_strtab_base_cfg(RegInfo *r, uint64_t addr,
+                                              uint64_t val, void *opaque)
+{
+    SMMUV3State *s = opaque;
+
+    if (((val >> 16) & 0x3) == 0x1) {
+        s->sid_split = (val >> 6) & 0x1f;
+        s->features |= SMMU_FEATURE_2LVL_STE;
+    }
+}
+
 #define REG_TO_OFFSET(reg) (reg >> 2)
 
-static RegInfo smmu_v3_regs[] = {
-    [ REG_TO_OFFSET(SMMU_REG_CR0)]             = {
+static RegInfo smmu_v3_regs[SMMU_NREGS] = {
+    [REG_TO_OFFSET(SMMU_REG_CR0)]             = {
         .post = smmuv3_reg_update_cr0,
     },
-    [ REG_TO_OFFSET(SMMU_REG_CR1)]             = {
-        .data = 0x0,
-    },
-    [ REG_TO_OFFSET(SMMU_REG_CR2)]             = {
-        .data = 0x0,
-    },
-    [ REG_TO_OFFSET(SMMU_REG_STATUSR)]         = {
-        .data = 0x0,
-    },
-    [ REG_TO_OFFSET(SMMU_REG_IRQ_CTRL)]        = {
-        .data = 0x0,
-    },
-    [ REG_TO_OFFSET(SMMU_REG_GERROR)]          = {
-        .data = 0x0,
-    },
-    [ REG_TO_OFFSET(SMMU_REG_GERRORN)]         = {
-        .data = 0x0,
+    [REG_TO_OFFSET(SMMU_REG_GERRORN)]         = {
         .post = smmu_update_irq,
     },
-    [ REG_TO_OFFSET(SMMU_REG_GERROR_IRQ_CFG0)] = {
-        .data = 0x0,
-    },
-    [ REG_TO_OFFSET(SMMU_REG_GERROR_IRQ_CFG1)] = {
-        .data = 0x0,
-    },
-    [ REG_TO_OFFSET(SMMU_REG_GERROR_IRQ_CFG2)] = {
-        .data = 0x0,
-    },
-    [ REG_TO_OFFSET(SMMU_REG_STRTAB_BASE)]     = {
+    [REG_TO_OFFSET(SMMU_REG_STRTAB_BASE)]     = {
         .post = smmu_update_base,
     },
-    [ REG_TO_OFFSET(SMMU_REG_STRTAB_BASE_CFG)] = {
-        .data = 0x0,
+    [REG_TO_OFFSET(SMMU_REG_STRTAB_BASE_CFG)] = {
+        .post = smmuv3_reg_update_strtab_base_cfg,
     },
-    [ REG_TO_OFFSET(SMMU_REG_CMDQ_BASE)]       = {
+    [REG_TO_OFFSET(SMMU_REG_CMDQ_BASE)]       = {
         .post = smmu_update_base,
     },
-    [ REG_TO_OFFSET(SMMU_REG_CMDQ_PROD)]       = {
+    [REG_TO_OFFSET(SMMU_REG_CMDQ_PROD)]       = {
         .post = smmu_update_q,
     },
-    [ REG_TO_OFFSET(SMMU_REG_CMDQ_CONS)]       = {
-        .data = 0x0,
-    },
-    [ REG_TO_OFFSET(SMMU_REG_EVTQ_BASE)]       = {
+    [REG_TO_OFFSET(SMMU_REG_EVTQ_BASE)]       = {
         .post = smmu_update_base,
     },
-    [ REG_TO_OFFSET(SMMU_REG_EVTQ_PROD)]       = {
-        .data = 0x0,
-    },
-    [ REG_TO_OFFSET(SMMU_REG_EVTQ_CONS)]       = {
-        .data = 0x0,
-    },
-    [ REG_TO_OFFSET(SMMU_REG_EVTQ_IRQ_CFG0)]   = {
-        .data = 0x0,
-    },
-    [ REG_TO_OFFSET(SMMU_REG_EVTQ_IRQ_CFG1)]   = {
-        .data = 0x0,
-    },
-    [ REG_TO_OFFSET(SMMU_REG_EVTQ_IRQ_CFG2)]   = {
-        .data = 0x0,
-    },
-    [ REG_TO_OFFSET(SMMU_REG_PRIQ_BASE)]       = {
-        //ost = smmu_update_base,
-    },
-    [ REG_TO_OFFSET(SMMU_REG_PRIQ_PROD)]       = {
-        .data = 0x0,
-    },
-    [ REG_TO_OFFSET(SMMU_REG_PRIQ_CONS)]       = {
-        .data = 0x0,
-    },
-    [ REG_TO_OFFSET(SMMU_REG_PRIQ_IRQ_CFG0)]   = {
-        .data = 0x0,
-    },
-    [ REG_TO_OFFSET(SMMU_REG_PRIQ_IRQ_CFG1)]   = {
-        .data = 0x0,
-    },
-    [ REG_TO_OFFSET(SMMU_REG_PRIQ_IRQ_CFG2)]   = {
-        .data = 0x0,
+    [REG_TO_OFFSET(SMMU_REG_PRIQ_BASE)]       = {
+        //.post = smmu_update_base,
     },
 };
 
@@ -1130,7 +1083,6 @@ smmuv3_translate(MemoryRegion *mr, hwaddr addr, bool is_write)
     }
 
     if (is_ste_valid(s, &ste) && is_ste_bypass(s, &ste)) {
-        printf("ste_valid condition:%d\n", is_ste_valid(s, &ste));
         goto bypass;
     }
 
@@ -1211,13 +1163,13 @@ static AddressSpace *smmu_init_pci_iommu(PCIBus *bus, void *opaque, int devfn)
     memory_region_init_iommu(&sdev->iommu, OBJECT(sys),
                              &smmu_iommu_ops, TYPE_SMMU_V3_DEV, UINT64_MAX);
 
-    address_space_init(&sdev->as, &sdev->iommu, "smmu-as");
+    //address_space_init(&sdev->as, &sdev->iommu, "smmu-as");
+    sdev->asp = address_space_init_shareable(&sdev->iommu, NULL);
     //printf("returened as %p\n", sdev->as);
 
-    //assert(sdev->as);
-
-    // address_space_init(&sdev->as, &sdev->mr, "smmu-pci");
-    return &sdev->as;
+    //assert(sdev->asp);
+    return sdev->asp;
+    //return &sdev->as;
 }
 
 static void smmu_write_mmio(void *opaque, hwaddr addr,
@@ -1446,6 +1398,24 @@ static void smmu_class_init(ObjectClass *klass, void *data)
 static void smmu_instance_init(Object *obj)
 {
     HERE();
+    SMMUV3State *s = SMMU_V3_DEV(obj);
+    int i;
+
+    for (i = 0; i < PCI_DEVFN_MAX; i++) {
+        char *name = g_strdup_printf("mr-%d", i);
+        object_property_add_link(obj, name, TYPE_MEMORY_REGION,
+                                 (Object **)&s->pbdev[i].iommu,
+                                 qdev_prop_allow_set_link_before_realize,
+                                 OBJ_PROP_LINK_UNREF_ON_RELEASE,
+                                 NULL);
+        g_free(name);
+        s->pbdev[i].smmu = s;
+    }
+}
+
+static void smmu_instance_init_new(Object *obj)
+{
+    HERE();
 }
 
 static const TypeInfo smmu_base_info = {
@@ -1464,7 +1434,7 @@ static void smmu_register_types(void)
         .parent = TYPE_SMMU_DEV_BASE,
         .class_data = NULL,
         .class_init = smmu_class_init,
-        .instance_init = smmu_instance_init,
+        .instance_init = smmu_instance_init_new,
     };
 
     type_register_static(&smmu_base_info);
