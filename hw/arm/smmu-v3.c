@@ -539,11 +539,12 @@ static void smmuv3_reg_update_cr0(RegInfo *r, uint64_t addr, uint64_t val,
                                   void *opaque)
 {
     SMMUV3State *s = opaque;
+
     smmu_write32_reg(s, SMMU_REG_CR0_ACK, val); /* Update the ACK register */
     smmu_update(s);                             /* Start processing if enabled */
 }
 
-static void smmuv3_reg_update_strtab_base_cfg(RegInfo *r, uint64_t addr,
+static void smmuv3_reg_update_strtab_bcfg(RegInfo *r, uint64_t addr,
                                               uint64_t val, void *opaque)
 {
     SMMUV3State *s = opaque;
@@ -567,7 +568,7 @@ static RegInfo smmu_v3_regs[SMMU_NREGS] = {
         .post = smmu_update_base,
     },
     [REG_TO_OFFSET(SMMU_REG_STRTAB_BASE_CFG)] = {
-        .post = smmuv3_reg_update_strtab_base_cfg,
+        .post = smmuv3_reg_update_strtab_bcfg,
     },
     [REG_TO_OFFSET(SMMU_REG_CMDQ_BASE)]       = {
         .post = smmu_update_base,
