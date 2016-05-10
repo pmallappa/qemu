@@ -589,7 +589,7 @@ tests/test-filter-mirror$(EXESUF): tests/test-filter-mirror.o $(qtest-obj-y)
 tests/test-filter-redirector$(EXESUF): tests/test-filter-redirector.o $(qtest-obj-y)
 tests/ivshmem-test$(EXESUF): tests/ivshmem-test.o contrib/ivshmem-server/ivshmem-server.o $(libqos-pc-obj-y)
 tests/vhost-user-bridge$(EXESUF): tests/vhost-user-bridge.o
-tests/smmuv3-test$(EXESUF): tests/smmuv3-test.o $(libqos-obj-y)
+tests/smmuv3-test$(EXESUF): tests/smmuv3-test.o $(libqos-obj-y) tests/libqos/malloc-generic.o
 
 ifeq ($(CONFIG_POSIX),y)
 LIBS += -lutil

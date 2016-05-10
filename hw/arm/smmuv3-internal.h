@@ -299,6 +299,28 @@ typedef enum evt_err SMMUEvtErr;
 #define ARM_SMMU_FEAT_PASSID_SUPPORT  (1 << 24) /* Some random bits for now */
 #define ARM_SMMU_FEAT_CD_2LVL         (1 << 25)
 
+struct SMMUQueue {
+     hwaddr base;
+     uint32_t prod;
+     uint32_t cons;
+     union {
+          struct {
+               uint8_t prod:1;
+               uint8_t cons:1;
+          };
+          uint8_t unused;
+     } wrap;
+
+     uint16_t entries;           /* Number of entries */
+     uint8_t  ent_size;          /* Size of entry in bytes */
+     uint8_t  shift;             /* Size in log2 */
+};
+typedef struct SMMUQueue SMMUQueue;
+
+#define Q_ENTRY(q, idx)  (q->base + q->ent_size * idx)
+#define Q_WRAP(q, pc)    ((pc) >> (q)->shift)
+#define Q_IDX(q, pc)     ((pc) & ((1 << (q)->shift) - 1))
+
 struct __smmu_data2 {
     uint32_t word[2];
 };

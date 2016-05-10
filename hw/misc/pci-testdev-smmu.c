@@ -22,6 +22,8 @@
 #include "hw/pci/pci.h"
 #include "qemu/event_notifier.h"
 
+#include "pci-testdev-smmu.h"
+
 /*
  * pci-testdev-smmu:
  *          Simple PCIe device, to enable read and write from memory.
@@ -33,6 +35,7 @@
  *          TST_SIZE        = 0x10
  *          TST_DST_ADDRESS = 0x18
  */
+#define PCI_TSTDEV_NREGS 0x10
 
 /*
  *  TST_COMMAND Register bits
@@ -41,23 +44,11 @@
  *          WRITE = 0x1
  */
 
-enum reg {
-    TST_REG_COMMAND  = 0x0,
-    TST_REG_STATUS   = 0x4,
-    TST_REG_SRC_ADDR = 0x8,
-    TST_REG_SIZE     = 0x10,
-    TST_REG_DST_ADDR = 0x18,
-
-    TST_REG_LAST     = 0x30,
+struct RegInfo {
+        uint64_t data;
+        char *name;
 };
-
-#define CMD_READ    0x100
-#define CMD_WRITE   0x200
-#define CMD_RW      0x300
-
-#define STATUS_OK   (1 << 0)
-#define STATUS_CMD_ERROR (1 << 1)
-#define STATUS_CMD_INVALID (1 << 2)
+typedef struct RegInfo RegInfo;
 
 typedef struct PCITestDevState {
     /*< private >*/
@@ -65,7 +56,7 @@ typedef struct PCITestDevState {
     /*< public >*/
 
     MemoryRegion mmio;
-    uint8_t regs[TST_REG_LAST];
+    RegInfo regs[PCI_TSTDEV_NREGS];
 } PCITestDevState;
 
 #define TYPE_PCI_TEST_DEV "pci-testdev-smmu"
@@ -74,81 +65,113 @@ typedef struct PCITestDevState {
     OBJECT_CHECK(PCITestDevState, (obj), TYPE_PCI_TEST_DEV)
 
 static void
-pci_testdev_smmu_reset(PCITestDevState *d)
+pci_tstdev_reset(PCITestDevState *d)
 {
     memset(d->regs, 0, sizeof(d->regs));
 }
 
+static inline void
+pci_tstdev_write_reg(PCITestDevState *pdev, hwaddr addr, uint64_t val)
+{
+    RegInfo *reg = &pdev->regs[addr >> 2];
+    reg->data = val;
+}
+
+static inline uint32_t
+pci_tstdev_read32_reg(PCITestDevState *pdev, hwaddr addr)
+{
+    RegInfo *reg = &pdev->regs[addr >> 2];
+    return (uint32_t) reg->data;
+}
+
+static inline uint64_t
+pci_tstdev_read64_reg(PCITestDevState *pdev, hwaddr addr)
+{
+        RegInfo *reg = &pdev->regs[addr >> 2];
+        return reg->data;
+}
 
 static void
-pci_testdev_smmu_handle_cmd(PCITestDevState *d, hwaddr addr, uint64_t val,
+pci_tstdev_handle_cmd(PCITestDevState *pdev, hwaddr addr, uint64_t val,
                             unsigned _unused_size)
 {
-    hwaddr src, dst;
-    src = *(uint64_t*)(&d->regs[TST_REG_SRC_ADDR]);
-    dst = *(uint64_t*)(&d->regs[TST_REG_DST_ADDR]);
-    uint32_t size = *(uint32_t*)(&d->regs[TST_REG_SIZE]);
+    uint64_t s = pci_tstdev_read64_reg(pdev, TST_REG_SRC_ADDR);
+    uint64_t d = pci_tstdev_read64_reg(pdev, TST_REG_DST_ADDR);
+    uint32_t size = pci_tstdev_read32_reg(pdev, TST_REG_SIZE);
     uint8_t buf[128];
 
+    printf("+++++++++++++++++++++> src:%lx, dst:%lx size:%d\n",
+           s, d, size);
     while (size) {
         int nbytes = (size < sizeof(buf)) ? size: sizeof(buf);
         int ret = 0;
-
-        if (val & CMD_READ)
-            ret = pci_dma_read(&d->dev, src, (void*)buf, nbytes);
-
+        printf("nbytes:%d\n", nbytes);
+        if (val & CMD_READ) {
+            printf("doing pci_dma_read\n");
+            ret = pci_dma_read(&pdev->dev, s, (void*)buf, nbytes);
+        }
         if (ret)
             return;
 
-        if (val & CMD_WRITE)
-            ret = pci_dma_write(&d->dev, dst, (void*)buf, nbytes);
-
+        if (val & CMD_WRITE) {
+            printf("doing pci_dma_write\n");
+            ret = pci_dma_write(&pdev->dev, d, (void*)buf, nbytes);
+        }
         size -= nbytes;
+        s += nbytes;
+        d += nbytes;
     }
 }
 
 static void
-pci_testdev_smmu_mmio_write(void *opaque, hwaddr addr,
-                            uint64_t val, unsigned size)
+pci_tstdev_mmio_write(void *opaque, hwaddr addr,
+                      uint64_t val, unsigned size)
 {
     PCITestDevState *d = opaque;
+    uint64_t lo;
 
+    printf("=================> addr:%ld act:%d val:%lx reg_addr:%p\n",
+           addr, TST_REG_COMMAND, val, &d->regs[addr]);
+    //addr >>= 2;
     switch (addr) {
     case TST_REG_COMMAND:
-        pci_testdev_smmu_handle_cmd(d, addr, val, size);
-        break;
-    case TST_REG_STATUS:        /* Read only reg */
-        break;
+            printf("calling handler.....\n");
+            pci_tstdev_handle_cmd(d, addr, val, size);
     case TST_REG_SRC_ADDR:
     case TST_REG_DST_ADDR:
-        d->regs[addr] = val;
-        break;
-
     case TST_REG_SIZE:
-        d->regs[addr] = (uint32_t)val;
-        break;
+            pci_tstdev_write_reg(d, addr, val);
+            break;
+    case TST_REG_SRC_ADDR + 4:
+    case TST_REG_DST_ADDR + 4:
+            lo = pci_tstdev_read32_reg(d, addr);
+            lo &= (0xffffffffULL << 32);
+            pci_tstdev_write_reg(d, addr, (val << 32) | lo);
+            break;
+    case TST_REG_STATUS:        /* Read only reg */
     default:
-        printf("Unkown register write\n");
+        printf("Unkown/RO register write\n");
+        break;
     }
 }
 
 static uint64_t
-pci_testdev_smmu_mmio_read(void *opaque, hwaddr addr, unsigned size)
+pci_tstdev_mmio_read(void *opaque, hwaddr addr, unsigned size)
 {
     PCITestDevState *d = opaque;
+
     switch (addr) {
     case TST_REG_SRC_ADDR:
     case TST_REG_DST_ADDR:
-    default:
-        return d->regs[addr];
+            return pci_tstdev_read64_reg(d, addr);
     }
 
-    return (uint32_t)d->regs[addr];
+    return pci_tstdev_read32_reg(d, addr);
 }
 
 static const MemoryRegionOps pci_testdev_mmio_ops = {
-    .read = pci_testdev_smmu_mmio_read,
-    .write = pci_testdev_smmu_mmio_write,
+    .read = pci_tstdev_mmio_read,
+    .write = pci_tstdev_mmio_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
     .impl = {
         .min_access_size = 1,
@@ -156,64 +179,62 @@ static const MemoryRegionOps pci_testdev_mmio_ops = {
     },
 };
 
-static void pci_testdev_smmu_realize(PCIDevice *pci_dev, Error **errp)
+static void pci_tstdev_realize(PCIDevice *pci_dev, Error **errp)
 {
     PCITestDevState *d = PCI_TEST_DEV(pci_dev);
     uint8_t *pci_conf;
 
-    printf("How are you\n");
     pci_conf = pci_dev->config;
 
     pci_conf[PCI_INTERRUPT_PIN] = 0; /* no interrupt pin */
-    printf("a\n");
+
     memory_region_init_io(&d->mmio, OBJECT(d), &pci_testdev_mmio_ops, d,
                           "pci-testdev-smmu-mmio", 1 << 10);
-    printf("b\n");
+
     pci_register_bar(pci_dev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY, &d->mmio);
-    printf("c\n");
 }
 
 static void
-pci_testdev_smmu_uninit(PCIDevice *dev)
+pci_tstdev_uninit(PCIDevice *dev)
 {
     PCITestDevState *d = PCI_TEST_DEV(dev);
 
-    pci_testdev_smmu_reset(d);
+    pci_tstdev_reset(d);
 }
 
-static void qdev_pci_testdev_smmu_reset(DeviceState *dev)
+static void qdev_pci_tstdev_reset(DeviceState *dev)
 {
     PCITestDevState *d = PCI_TEST_DEV(dev);
-    pci_testdev_smmu_reset(d);
+    pci_tstdev_reset(d);
 }
 
-static void pci_testdev_smmu_class_init(ObjectClass *klass, void *data)
+static void pci_tstdev_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
 
     printf("Hello\n");
-    k->realize = pci_testdev_smmu_realize;
-    k->exit = pci_testdev_smmu_uninit;
+    k->realize = pci_tstdev_realize;
+    k->exit = pci_tstdev_uninit;
     k->vendor_id = PCI_VENDOR_ID_REDHAT;
     k->device_id = PCI_DEVICE_ID_REDHAT_TEST;
     k->revision = 0x00;
     k->class_id = PCI_CLASS_OTHERS;
     dc->desc = "PCI Test Device - for smmu";
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
-    dc->reset = qdev_pci_testdev_smmu_reset;
+    dc->reset = qdev_pci_tstdev_reset;
 }
 
-static const TypeInfo pci_testdev_smmu_info = {
+static const TypeInfo pci_tstdev_info = {
     .name          = TYPE_PCI_TEST_DEV,
     .parent        = TYPE_PCI_DEVICE,
     .instance_size = sizeof(PCITestDevState),
-    .class_init    = pci_testdev_smmu_class_init,
+    .class_init    = pci_tstdev_class_init,
 };
 
-static void pci_testdev_smmu_register_types(void)
+static void pci_tstdev_register_types(void)
 {
-    type_register_static(&pci_testdev_smmu_info);
+    type_register_static(&pci_tstdev_info);
 }
 
-type_init(pci_testdev_smmu_register_types)
+type_init(pci_tstdev_register_types)

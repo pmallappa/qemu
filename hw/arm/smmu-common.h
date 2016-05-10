@@ -20,13 +20,12 @@
 #ifndef HW_ARM_SMMU_COMMON_H
 #define HW_ARM_SMMU_COMMON_H
 
+#include <hw/sysbus.h>
+
 #define TYPE_SMMU_DEV_BASE "smmu-base"
 #define TYPE_SMMU_V3_DEV   "smmuv3"
 
 //#define TYPE_SMMU_500_DEV "smmu-500"
-
-extern uint32_t  dbg_bits;
-
 typedef struct SMMUState {
     /* <private> */
     SysBusDevice  dev;
@@ -92,6 +91,8 @@ typedef struct {
 #define ARM_SMMU_DEBUG
 #ifdef ARM_SMMU_DEBUG
 
+extern uint32_t  dbg_bits;
+
 #define HERE()  printf("%s:%d\n", __func__, __LINE__)
 
 enum {
@@ -114,10 +115,12 @@ enum {
 #define DBG_VERBOSE3 (DBG_VERBOSE2 | DBG_BIT(DBG2))
 #define DBG_VERBOSE4 (DBG_VERBOSE3 | DBG_BIT(INFO))
 
+#if 0
 uint32_t  dbg_bits =                            \
     DBG_DEFAULT | DBG_VERBOSE3 |                \
     DBG_EXTRA |                                 \
     DBG_VERBOSE1;
+#endif
 
 #define SMMU_DPRINTF(lvl, fmt, ...)                     \
     do {                                                \
@@ -132,83 +135,10 @@ uint32_t  dbg_bits =                            \
 #define SMMU_DPRINTF(lvl, fmt, ...)
 #endif  /* SMMU_DEBUG */
 
+SMMUTransErr smmu_translate_lpae(SMMUTransCfg *cfg, uint32_t *pagesize,
+                                 uint32_t *perm, bool is_write);
 
-typedef struct SMMUV3State SMMUV3State;
-static MemTxResult smmu_read_sysmem(SMMUV3State *s, hwaddr addr,
-                                    void *buf, int len);
-
-static SMMUTransErr
-smmu_translate_lpae(SMMUTransCfg *cfg, uint32_t *pagesize,
-                    uint32_t *perm, bool is_write)
-{
-    int     ret, level;
-    int     granule_sz = cfg->granule_sz;
-    int     va_size = cfg->va_size;
-    hwaddr  va, addr, mask;
-    hwaddr *outaddr;
-
-    va = addr = cfg->va;        /* or ipa in Stage2 */
-
-    assert(va_size == 64);      /* We dont support 32-bit yet */
-
-    outaddr = cfg->s2_needed ? &cfg->opa : &cfg->pa; /* same location, for clearity */
-
-    level = 4 - (va_size - cfg->tsz - 4) / granule_sz;
-
-    mask = (1ULL << (granule_sz + 3)) - 1;
-
-    addr = extract64(cfg->ttbr, 0, 48);
-    addr &= ~((1ULL << (va_size - cfg->tsz - (granule_sz * (4 - level)))) - 1);
-
-    for (;;) {
-        uint64_t desc;
-
-        addr |= (va >> (granule_sz * (4 - level))) & mask;
-        addr &= ~7ULL;
-
-        if (smmu_read_sysmem(NULL, addr, &desc, sizeof(desc))) {
-            ret = SMMU_TRANS_ERR_WALK_EXT_ABRT;
-            SMMU_DPRINTF(CRIT, "Translation table read error lvl:%d\n", level);
-            break;
-        }
-        SMMU_DPRINTF(TT_1,
-                     "Level: %d granule_sz:%d mask:%lx addr:%lx desc:%lx\n",
-                     level, granule_sz, mask, addr, desc);
-
-        if (!(desc & 1) ||
-            (!(desc & 2) & (level == 3))) {
-            ret = SMMU_TRANS_ERR_TRANS;
-            break;
-        }
-
-        if (cfg->s2_needed) {   /* We call again to resolve address at this 'level' */
-            uint32_t unused1, unused2 ATTRIBUTE_UNUSED;
-            SMMUTransCfg *s2cfg = cfg->s2cfg;
-            s2cfg->ipa = desc;
-            ret = smmu_translate_lpae(s2cfg, &unused1,
-                                      &unused2, is_write);
-            if (ret) {
-                break;
-            }
-            desc = (uint64_t)s2cfg->opa;
-        }
-
-        addr = desc & 0xfffffff000ULL;
-        if ((desc & 2) && (level < 3)) {
-            level++;
-            continue;
-        }
-        *pagesize = (1ULL << ((granule_sz * (4 - level)) + 3));
-        addr |= (va & (*pagesize - 1));
-        SMMU_DPRINTF(TT_1, "addr:%lx pagesize:%x\n", addr, *pagesize);
-        break;
-    }
-
-    if (ret == 0) {
-        *outaddr = addr;
-    }
-
-    return ret;
-}
+MemTxResult smmu_read_sysmem(hwaddr addr, void *buf, int len);
+void smmu_write_sysmem(hwaddr addr, void *buf, int len);
 
 #endif  /* HW_ARM_SMMU_COMMON */
