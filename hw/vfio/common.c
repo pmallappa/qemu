@@ -412,10 +412,10 @@ static void vfio_listener_region_add(MemoryListener *listener,
 
     ret = vfio_dma_map(container, iova, int128_get64(llsize),
                        vaddr, section->readonly);
-    if (ret) {
         error_report("vfio_dma_map(%p, 0x%"HWADDR_PRIx", "
                      "0x%"HWADDR_PRIx", %p) = %d (%m)",
                      container, iova, int128_get64(llsize), vaddr, ret);
+    if (ret) {
         goto fail;
     }
 
