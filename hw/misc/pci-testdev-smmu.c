@@ -135,7 +135,11 @@ pci_tstdev_mmio_write(void *opaque, hwaddr addr,
     //addr >>= 2;
     switch (addr) {
     case TST_REG_COMMAND:
+<<<<<<< HEAD
             printf("Calling command handler.....\n");
+=======
+            printf("calling handler.....\n");
+>>>>>>> 5afe235... [optional] hw: misc: added testdev for smmu
             pci_tstdev_handle_cmd(d, addr, val, size);
     case TST_REG_SRC_ADDR:
     case TST_REG_DST_ADDR:
