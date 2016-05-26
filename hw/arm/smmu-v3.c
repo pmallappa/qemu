@@ -283,6 +283,7 @@ static int smmu_cmdq_consume(SMMUV3State *s)
         case SMMU_CMD_TLBI_EL2_ALL:  /* Fallthrough */
         case SMMU_CMD_TLBI_EL3_ALL:
         case SMMU_CMD_TLBI_NH_ALL:
+        case SMMU_CMD_TLBI_S2_IPA:
             break;
         case SMMU_CMD_SYNC:     /* Fallthrough */
             if (CMD_CS(&cmd) & CMD_SYNC_SIG_IRQ) {
@@ -876,8 +877,9 @@ static SMMUEvtErr smmu_walk_pgtable(SMMUV3State *s, Ste *ste, Cd *cd,
 {
     SMMUState *sys = SMMU_SYS_DEV(s);
     SMMUBaseClass *sbc = SMMU_DEVICE_GET_CLASS(sys);
-    SMMUTransCfg cfg[2] = {{{0,} } };
-    SMMUTransCfg *s1cfg = &cfg[0], *s2cfg = &cfg[1];
+    SMMUTransCfg _cfg[2] = {{{0,} } };
+    SMMUTransCfg *s1cfg = &_cfg[0], *s2cfg = &_cfg[1];
+    SMMUTransCfg *cfg = NULL;
     SMMUEvtErr retval = 0;
     uint32_t ste_cfg = STE_CONFIG(ste);
     uint32_t page_size = 0, perm = 0;
@@ -888,10 +890,9 @@ static SMMUEvtErr smmu_walk_pgtable(SMMUV3State *s, Ste *ste, Cd *cd,
     if (ste_cfg == STE_CONFIG_S1BY_S2BY) {
         return 0;
     }
-    s1cfg->va = tlbe->iova;
 
     SMMU_DPRINTF(TT_1, "Input addr: %lx ste_config:%d\n",
-                 s1cfg->va, ste_cfg);
+                 tlbe->iova, ste_cfg);
 
     if (ste_cfg & STE_CONFIG_S1TR_S2BY) {
         smmu_cfg_populate_s1(s1cfg, cd);
@@ -902,16 +903,8 @@ static SMMUEvtErr smmu_walk_pgtable(SMMUV3State *s, Ste *ste, Cd *cd,
         s1cfg->ttbr = extract64(s1cfg->ttbr, 0, s1cfg->oas);
         s1cfg->s2cfg = s2cfg;
         s1cfg->s2_needed = (STE_CONFIG(ste) == STE_CONFIG_S1TR_S2TR) ? 1 : 0;
-#if 0
-        retval = sbc->translate_lpae(s1cfg, &page_size, &perm,
-                                     is_write);
-        if (retval != 0) {
-            SMMU_DPRINTF(CRIT, "FAILED Stage1 translation\n");
-            goto exit;
-        }
-        pa = cfg->pa;
-#endif
-        SMMU_DPRINTF(DBG1, "DONE: Stage1 tanslated :%lx\n ", pa);
+        cfg = s1cfg;
+        SMMU_DPRINTF(DBG1, "DONE: Stage1 tanslated: %lx\n ", s1cfg->pa);
     }
 
     if (ste_cfg & STE_CONFIG_S1BY_S2TR) {
@@ -922,17 +915,14 @@ static SMMUEvtErr smmu_walk_pgtable(SMMUV3State *s, Ste *ste, Cd *cd,
                          s2cfg->oas);
         /* fix ttbr - make top bits zero*/
         s2cfg->ttbr = extract64(s2cfg->ttbr, 0, s2cfg->oas);
-#if 0
-        retval = sbc->translate_lpae(s2cfg, &page_size,
-                                     &perm, is_write);
-        if (retval != 0) {
-            SMMU_DPRINTF(CRIT, "FAILED Stage2 translation\n");
-            goto exit;
-        }
-        pa = s2cfg->opa;
-#endif
+
+        if (!cfg)
+            cfg = s2cfg;
+
         SMMU_DPRINTF(DBG1, "DONE: Stage2 tanslated :%lx\n ", pa);
     }
+
+    cfg->va = tlbe->iova;
 
     retval = sbc->translate_lpae(cfg, &page_size, &perm,
                                  is_write);
@@ -1062,7 +1052,7 @@ smmuv3_translate(MemoryRegion *mr, hwaddr addr, bool is_write)
     SMMU_DPRINTF(INFO, "Valid STE Found\n");
 
     /* Stream Bypass */
-    config = STE_CONFIG(&ste);
+    config = STE_CONFIG(&ste) & 0x3;
     /*
      * Mostly we have S1-Translate and S2-Bypass, Others will be
      * implemented as we go
@@ -1081,10 +1071,6 @@ smmuv3_translate(MemoryRegion *mr, hwaddr addr, bool is_write)
             error = SMMU_EVT_C_BAD_CD;
             goto error_out;
         }
-    }
-
-    if (config & (STE_CONFIG_S1BY_S2TR)) {
-        SMMU_DPRINTF(CRIT, "S1+S2 translation, not supported\n");
     }
 
     /* Walk Stage1, if S2 is enabled, S2 walked for Every access on S1 */
@@ -1118,18 +1104,14 @@ static AddressSpace *smmu_init_pci_iommu(PCIBus *bus, void *opaque, int devfn)
     sdev->smmu = s;
     sdev->bus = bus;
     sdev->devfn = devfn;
-    //sdev->as = &s->iommu_as;
 
     memory_region_init_iommu(&sdev->iommu, OBJECT(sys),
                              &smmu_iommu_ops, TYPE_SMMU_V3_DEV, UINT64_MAX);
 
-    //address_space_init(&sdev->as, &sdev->iommu, "smmu-as");
-    sdev->asp = address_space_init_shareable(&sdev->iommu, NULL);
-    //printf("returened as %p\n", sdev->as);
 
-    //assert(sdev->asp);
+    sdev->asp = address_space_init_shareable(&sdev->iommu, NULL);
+
     return sdev->asp;
-    //return &sdev->as;
 }
 
 static void smmu_write_mmio(void *opaque, hwaddr addr,
@@ -1232,29 +1214,6 @@ static void smmu_init_iommu_as(SMMUV3State *sys)
     }
 }
 
-#if 0
-static int smmu_init(SysBusDevice *dev)
-{
-    SMMUState *sys = SMMU_SYS_DEV(dev);
-    SMMUV3State *s = SMMU_V3_DEV(dev);
-    //SMMUBaseClass *sbc = SMMU_DEVICE_GET_CLASS(s);
-
-    //s->regs = g_malloc((SMMU_NREGS >> 2) * sizeof(struct RegInfo));
-
-    /* Register Access */
-    memory_region_init_io(&sys->iomem, OBJECT(s),
-                          &smmu_mem_ops, sys, TYPE_SMMU_V3_DEV, 0x1000);
-
-    sysbus_init_mmio(dev, &sys->iomem);
-
-    smmu_init_irq(s, dev);
-
-    smmu_init_iommu_as(s);
-
-    return 0;
-}
-#endif
-
 static void smmu_reset(DeviceState *dev)
 {
     SMMUState *sys = SMMU_SYS_DEV(dev);
@@ -1340,12 +1299,7 @@ static const VMStateDescription vmstate_smmu = {
 static void smmu_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
-    //SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
     SMMUBaseClass *sbc = SMMU_DEVICE_CLASS(klass);
-    //SMMUInfo *info = (SMMUInfo *)data;
-
-    HERE();
-    //k->init = smmu_init;
 
     sbc->translate_lpae = smmu_translate_lpae;
 
@@ -1368,15 +1322,14 @@ static void smmu_base_instance_init(Object *obj)
                                  OBJ_PROP_LINK_UNREF_ON_RELEASE,
                                  NULL);
         g_free(name);
-        //s->pbdev[i].smmu = s;
     }
 }
 
 static void smmu_instance_init(Object *obj)
 {
-    SMMUV3State *s = SMMU_V3_DEV(obj);
     int i;
-    HERE();
+    SMMUV3State *s = SMMU_V3_DEV(obj);
+
     for (i = 0; i < PCI_DEVFN_MAX; i++) {
         s->pbdev[i].smmu = s;
     }

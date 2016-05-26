@@ -83,8 +83,8 @@ smmu_translate_lpae(SMMUTransCfg *cfg, uint32_t *pagesize,
         uint64_t desc;
         uint64_t ored = (va >> (granule_sz * (4 - level))) & mask;
         SMMU_DPRINTF(TT_1,
-                     "Level: %d addr:%lx ored:%lx\n",
-                     level, addr, ored);
+                     "Level: %d va:%lx addr:%lx ored:%lx\n",
+                     level, va, addr, ored);
 
         addr |= (va >> (granule_sz * (4 - level))) & mask;
         addr &= ~7ULL;
@@ -101,7 +101,6 @@ smmu_translate_lpae(SMMUTransCfg *cfg, uint32_t *pagesize,
 
         if (!(desc & 1) ||
             (!(desc & 2) && (level == 3))) {
-            SMMU_DPRINTF(TT_1, "FUCK THIS\n");
             ret = SMMU_TRANS_ERR_TRANS;
             break;
         }

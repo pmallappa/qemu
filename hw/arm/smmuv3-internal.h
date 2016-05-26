@@ -117,7 +117,7 @@ enum {
  * STE fields
  *****************************/
 #define STE_VALID(x)   extract32((x)->word[0], 0, 1) /* 0 */
-#define STE_CONFIG(x)  extract32((x)->word[0], 1, 3)
+#define STE_CONFIG(x)  (extract32((x)->word[0], 1, 3) & 0x3)
 enum {
     STE_CONFIG_NONE      = 0,
     STE_CONFIG_S1BY_S2BY = 4,   /* S1 Bypass, S2 Bypass */
