@@ -962,6 +962,7 @@ static void create_smmu(VirtBoardInfo *vbi, qemu_irq *pic)
     int i;
     char *smmu;
     const char compat[] = "arm,smmu-v3";
+    const char brcm[] = "broadcom,single-page-registers";
     int irq =  vbi->irqmap[VIRT_SMMU];
     hwaddr base = vbi->memmap[VIRT_SMMU].base;
     hwaddr size = vbi->memmap[VIRT_SMMU].size;
@@ -977,6 +978,7 @@ static void create_smmu(VirtBoardInfo *vbi, qemu_irq *pic)
     smmu = g_strdup_printf("/smmuv3@%" PRIx64, base);
     qemu_fdt_add_subnode(vbi->fdt, smmu);
     qemu_fdt_setprop(vbi->fdt, smmu, "compatible", compat, sizeof(compat));
+    qemu_fdt_setprop(vbi->fdt, smmu, brcm, NULL, 0);
     qemu_fdt_setprop_sized_cells(vbi->fdt, smmu, "reg", 2, base, 2, size);
 
     for (i = 0; i < NUM_SMMU_IRQS; i++) {
