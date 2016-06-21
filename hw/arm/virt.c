@@ -1106,6 +1106,12 @@ static void create_pcie(const VirtBoardInfo *vbi, qemu_irq *pic,
 
     qemu_fdt_setprop_cell(vbi->fdt, nodename, "#interrupt-cells", 1);
     qemu_fdt_setprop_cells(vbi->fdt, nodename, "iommus", vbi->smmu_phandle);
+    {
+    	uint32_t full_iommu_map[4 * 4] = { 0, cpu_to_be32(vbi->smmu_phandle), 0x0, cpu_to_be32(0xffff), };
+		
+        qemu_fdt_setprop(vbi->fdt, nodename, "iommu-map",
+                         full_iommu_map, sizeof(full_iommu_map));
+    }
     create_pcie_irq_map(vbi, vbi->gic_phandle, irq, nodename);
 
     g_free(nodename);
