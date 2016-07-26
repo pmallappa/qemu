@@ -30,6 +30,7 @@
 #include "smmuv3-internal.h"
 
 #define SMMU_NREGS       0x200
+#define PCI_BUS_MAX      256
 #define PCI_DEVFN_MAX    256
 
 #ifdef ARM_SMMU_DEBUG
@@ -62,7 +63,12 @@ struct SMMUDevice {
     int           devfn;
     MemoryRegion  iommu;
     AddressSpace  as;
-    AddressSpace  *asp;
+};
+
+typedef struct SMMUPciBus SMMUPciBus;
+struct SMMUPciBus {
+    PCIBus       *bus;
+    SMMUDevice   *pbdev[0]; /* Parent array is sparse, so dynamically alloc */
 };
 
 typedef struct SMMUV3State SMMUV3State;
@@ -86,8 +92,12 @@ struct SMMUV3State {
     /* IOMMU Address space */
     MemoryRegion iommu;
     AddressSpace iommu_as;
-
-    SMMUDevice   pbdev[PCI_DEVFN_MAX];
+    /*
+     * Bus number is not populated in the beginning, hence we need
+     * a mechanism to retrieve the corresponding address space for each
+     * pci device.
+    */
+    GHashTable   *smmu_as_by_busptr;
 };
 
 #define SMMU_V3_DEV(obj) OBJECT_CHECK(SMMUV3State, (obj), TYPE_SMMU_V3_DEV)
@@ -1118,6 +1128,7 @@ smmuv3_translate(MemoryRegion *mr, hwaddr addr, bool is_write)
         .perm = IOMMU_NONE,
     };
 
+
     /* SMMU Bypass */
     /* We allow traffic through if SMMU is disabled */
     if (!smmu_enabled(s)) {
@@ -1198,20 +1209,31 @@ static const MemoryRegionIOMMUOps smmu_iommu_ops = {
 static AddressSpace *smmu_init_pci_iommu(PCIBus *bus, void *opaque, int devfn)
 {
     SMMUV3State *s = opaque;
-    SMMUDevice *sdev = &s->pbdev[PCI_SLOT(devfn)];
     SMMUState *sys = SMMU_SYS_DEV(s);
+    uintptr_t key = (uintptr_t)bus;
+    SMMUPciBus *sbus = g_hash_table_lookup(s->smmu_as_by_busptr, &key);
+    SMMUDevice *sdev;
 
-    sdev->smmu = s;
-    sdev->bus = bus;
-    sdev->devfn = devfn;
+    if (!sbus) {
+        sbus = g_malloc0(sizeof(SMMUPciBus) + sizeof(SMMUDevice) * PCI_DEVFN_MAX);
+        sbus->bus = bus;
+        g_hash_table_insert(s->smmu_as_by_busptr, &key, sbus);
+    }
 
-    memory_region_init_iommu(&sdev->iommu, OBJECT(sys),
-                             &smmu_iommu_ops, TYPE_SMMU_V3_DEV, UINT64_MAX);
+    sdev = sbus->pbdev[devfn];
+    if (!sdev) {
+        sdev = sbus->pbdev[devfn] = g_malloc0(sizeof(SMMUDevice)); 
 
+        sdev->smmu = s;
+        sdev->bus = bus;
+        sdev->devfn = devfn;
 
-    sdev->asp = address_space_init_shareable(&sdev->iommu, NULL);
+        memory_region_init_iommu(&sdev->iommu, OBJECT(sys),
+                                 &smmu_iommu_ops, TYPE_SMMU_V3_DEV, UINT64_MAX);
+        address_space_init(&sdev->as, &sdev->iommu, TYPE_SMMU_V3_DEV);
+    }
 
-    return sdev->asp;
+    return &sdev->as;
 }
 
 static void smmu_write_mmio(void *opaque, hwaddr addr,
@@ -1314,7 +1336,7 @@ static void smmu_init_iommu_as(SMMUV3State *sys)
         SMMU_DPRINTF(CRIT, "Found PCI bus, setting up iommu\n");
         pci_setup_iommu(pcibus, smmu_init_pci_iommu, s);
     } else {
-        SMMU_DPRINTF(CRIT, "Could'nt find PCI bus, SMMU is not registered\n");
+        SMMU_DPRINTF(CRIT, "No PCI bus, SMMU is not registered\n");
     }
 }
 
@@ -1364,6 +1386,16 @@ static int smmu_populate_internal_state(void *opaque, int version_id)
     return 0;
 }
 
+static gboolean smmu_uint64_equal(gconstpointer v1, gconstpointer v2)
+{
+    return *((const uint64_t *)v1) == *((const uint64_t *)v2);
+}
+
+static guint smmu_uint64_hash(gconstpointer v)
+{
+    return (guint)*(const uint64_t *)v;
+}
+
 static void smmu_realize(DeviceState *d, Error **errp)
 {
     SMMUState *sys = SMMU_SYS_DEV(d);
@@ -1374,6 +1406,8 @@ static void smmu_realize(DeviceState *d, Error **errp)
     memory_region_init_io(&sys->iomem, OBJECT(s),
                           &smmu_mem_ops, sys, TYPE_SMMU_V3_DEV, 0x20000);
 
+    s->smmu_as_by_busptr = g_hash_table_new_full(smmu_uint64_hash, smmu_uint64_equal,
+                                                 g_free, g_free);
     sysbus_init_mmio(dev, &sys->iomem);
 
     smmu_init_irq(s, dev);
@@ -1409,10 +1443,11 @@ static void smmu_class_init(ObjectClass *klass, void *data)
 
 static void smmu_base_instance_init(Object *obj)
 {
-    SMMUV3State *s = SMMU_V3_DEV(obj);
     int i;
-
+#if 0
+    SMMUV3State *s = SMMU_V3_DEV(obj);
     for (i = 0; i < PCI_DEVFN_MAX; i++) {
+
         char *name = g_strdup_printf("mr-%d", i);
         object_property_add_link(obj, name, TYPE_MEMORY_REGION,
                                  (Object **)&s->pbdev[i].iommu,
@@ -1420,17 +1455,13 @@ static void smmu_base_instance_init(Object *obj)
                                  OBJ_PROP_LINK_UNREF_ON_RELEASE,
                                  NULL);
         g_free(name);
+#endif
     }
 }
 
 static void smmu_instance_init(Object *obj)
 {
-    int i;
-    SMMUV3State *s = SMMU_V3_DEV(obj);
-
-    for (i = 0; i < PCI_DEVFN_MAX; i++) {
-        s->pbdev[i].smmu = s;
-    }
+    // Nothing much to do here as of now
 }
 
 static const TypeInfo smmu_base_info = {
