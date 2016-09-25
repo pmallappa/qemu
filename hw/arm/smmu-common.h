@@ -86,7 +86,7 @@ typedef struct {
 #define SMMU_DEVICE_GET_CLASS(obj)                              \
     OBJECT_GET_CLASS(SMMUBaseClass, (obj), TYPE_SMMU_DEV_BASE)
 
-/* #define ARM_SMMU_DEBUG */
+#define ARM_SMMU_DEBUG
 #ifdef ARM_SMMU_DEBUG
 
 extern uint32_t  dbg_bits;
@@ -116,7 +116,7 @@ enum {
 #define SMMU_DPRINTF(lvl, fmt, ...)             \
     do {                                        \
         if (dbg_bits & DBG_BIT(lvl)) {          \
-            qemu_log_mask(CPU_LOG_IOMMU,        \
+            qemu_log_mask(LOG_GUEST_IOMMU,      \
                           "(smmu)%s: " fmt ,    \
                           __func__,             \
                           ## __VA_ARGS__);      \
