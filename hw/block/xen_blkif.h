@@ -122,6 +122,7 @@ static inline void blkif_get_x86_64_req(blkif_request_t *dst,
 {
     int i, n = BLKIF_MAX_SEGMENTS_PER_REQUEST;
 
+<<<<<<< HEAD
     dst->operation = src->operation;
     dst->nr_segments = src->nr_segments;
     dst->handle = src->handle;

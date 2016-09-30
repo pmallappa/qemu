@@ -382,6 +382,87 @@ build_rsdp(GArray *rsdp_table, BIOSLinker *linker, unsigned rsdt_tbl_offset)
     return rsdp_table;
 }
 
+#define offset_of(type, member) ((long) &((type *)0)->member)
+
+static void
+build_iort(GArray *table_data, BIOSLinker *linker, VirtGuestInfo *guest_info)
+{
+    int iort_start = table_data->len;
+    int its_start, smmu_start;
+    AcpiIortTable *iort;
+    AcpiIortNode *iort_node;
+    AcpiIortSmmu3 *smmu;
+    AcpiIortItsGroup *its;
+    AcpiIortRC *rc;
+    const int nits = 1, nids = 1;
+    int i;
+    const MemMapEntry *memmap = guest_info->memmap;
+
+    iort = acpi_data_push(table_data, sizeof(*iort));
+
+    iort->length = sizeof(*iort);
+    iort->node_offset = table_data->len - iort_start;
+
+    iort->node_count++;
+    /* ITS */ {
+        its_start = table_data->len;
+        its = acpi_data_push(table_data, sizeof(*its));
+        iort_node = &its->iort_node;
+        iort_node->type = ACPI_IORT_NODE_ITS_GROUP;
+        iort_node->length = sizeof(*its);
+        its->its_count = nits;
+        iort_node->mapping_offset = 0x0;
+        iort_node->mapping_count = 0x0;
+    }
+
+    iort->node_count++;
+    /* SMMUv3 node */ {
+        unsigned int size = sizeof(*smmu) + (nids * sizeof(AcpiIortIdMapping));
+        smmu_start = table_data->len;
+        smmu = acpi_data_push(table_data, size);
+
+        iort_node = &smmu->iort_node;
+        iort_node->type = ACPI_IORT_NODE_SMMU_V3;
+        iort_node->length = size;
+        iort_node->mapping_offset = offset_of(AcpiIortSmmu3, id_mapping_array);
+        smmu->base_address = cpu_to_le64(memmap[VIRT_SMMU].base);
+
+        for (i = 0; i < nids; i++) {
+            AcpiIortIdMapping *id = &smmu->id_mapping_array[i];
+            id->input_base = 0x0;
+            id->id_count = 0xFFFF;      /* All 16-bit ids */
+            id->output_base = 0x0;
+            id->output_reference = its_start - iort_start;
+        }
+        iort_node->mapping_count = i;
+    }
+
+    iort->node_count++;
+    /* RC Node */ {
+        unsigned int size = sizeof(*smmu) + (nids * sizeof(AcpiIortIdMapping));
+        rc = acpi_data_push(table_data, size);
+        iort_node = &rc->iort_node;
+        iort_node->type = ACPI_IORT_NODE_PCI_ROOT_COMPLEX;
+        iort_node->length = size;
+        iort_node->mapping_offset = offset_of(AcpiIortRC, id_mapping_array);
+        rc->memory_properties = 1;        /* Host RC is cache-coherent */
+        rc->pci_segment_number = 0;
+
+        for (i = 0; i < nids; i++) {
+            AcpiIortIdMapping *id = &rc->id_mapping_array[i];
+            id->input_base = 0x0;
+            id->id_count = 0xFFFF;      /* All 16-bit ids */
+            id->output_base = 0x0;
+            id->output_reference = smmu_start - iort_start;
+        }
+        iort_node->mapping_count = i;
+
+    }
+
+    build_header(linker, table_data, (void *)(table_data->data + iort_start),
+                 "IORT", table_data->len - iort_start, 0, NULL, NULL);
+}
+
 static void
 build_spcr(GArray *table_data, BIOSLinker *linker, VirtGuestInfo *guest_info)
 {
@@ -668,6 +749,7 @@ void virt_acpi_build(VirtGuestInfo *guest_info, AcpiBuildTables *tables)
      * MADT
      * MCFG
      * DSDT
+     * IORT = ACPI 6.0
      */
 
     /* DSDT is pointed to by FADT */
@@ -694,6 +776,9 @@ void virt_acpi_build(VirtGuestInfo *guest_info, AcpiBuildTables *tables)
         acpi_add_table(table_offsets, tables_blob);
         build_srat(tables_blob, tables->linker, guest_info);
     }
+
+    acpi_add_table(table_offsets, tables_blob);
+    build_iort(tables_blob, tables->linker, guest_info);
 
     /* RSDT is pointed to by RSDP */
     rsdt = tables_blob->len;

@@ -259,6 +259,104 @@ typedef struct AcpiFacsDescriptorRev1 AcpiFacsDescriptorRev1;
  */
 
 /*
+ * IORT Table
+ */
+#define ACPI_IORT_NODE_ITS_GROUP        0x0
+#define ACPI_IORT_NODE_NAMED_COMPONENT  0x1
+#define ACPI_IORT_NODE_PCI_ROOT_COMPLEX 0x2
+#define ACPI_IORT_NODE_SMMU             0x3
+#define ACPI_IORT_NODE_SMMU_V3          0x4
+
+struct AcpiIortTable
+{
+    ACPI_TABLE_HEADER_DEF     /* ACPI common table header */
+    uint32_t node_count;
+    uint32_t node_offset;
+    uint32_t reserved;
+} QEMU_PACKED;
+typedef struct AcpiIortTable AcpiIortTable;
+
+struct AcpiIortIdMapping
+{
+    uint32_t input_base;
+    uint32_t id_count;
+    uint32_t output_base;
+    uint32_t output_reference;
+    uint32_t flags;
+} QEMU_PACKED;
+typedef struct AcpiIortIdMapping AcpiIortIdMapping;
+
+struct AcpiIortNode
+{
+    uint8_t  type;
+    uint16_t length;
+    uint8_t  revision;
+    uint32_t reserved;
+    uint32_t mapping_count;
+    uint32_t mapping_offset;
+    //char     node_data[1];
+} QEMU_PACKED;
+typedef struct AcpiIortNode AcpiIortNode;
+
+struct AcpiIortItsGroup
+{
+    AcpiIortNode iort_node;
+
+    uint32_t its_count;
+
+    uint32_t identifiers[1];
+} QEMU_PACKED;
+typedef struct AcpiIortItsGroup AcpiIortItsGroup;
+
+struct AcpiIortSmmu2
+{
+    AcpiIortNode iort_node;
+    uint64_t base_address;
+    uint64_t span;
+    uint32_t model;
+    uint32_t flags;
+    uint32_t global_interrupt_offset;
+    uint32_t context_interrupt_count;
+    uint32_t context_interrupt_offset;
+    uint32_t pmu_interrupt_count;
+    uint32_t pmu_interrupt_offset;
+
+    // Global interrupt array
+    uint64_t interrupts[1];
+
+    AcpiIortIdMapping id_mapping_array[0];
+} QEMU_PACKED;
+typedef struct AcpiIortSmmu2 AcpiIortSmmu2;
+
+struct AcpiIortSmmu3
+{
+    AcpiIortNode iort_node;
+    uint64_t base_address;
+    uint32_t flags;
+    uint32_t reserved;
+    uint64_t vatos_address;
+    uint32_t model;
+    uint32_t event_gsiv;
+    uint32_t pri_gsiv;
+    uint32_t gerr_gsiv;
+    uint32_t sync_gsiv;
+
+    AcpiIortIdMapping id_mapping_array[0];
+} QEMU_PACKED;
+typedef struct AcpiIortSmmu3 AcpiIortSmmu3;
+
+struct AcpiIortRC
+{
+    AcpiIortNode iort_node;
+    uint64_t memory_properties;
+    uint32_t ats_attribute;
+    uint32_t pci_segment_number;
+
+    AcpiIortIdMapping id_mapping_array[0];
+} QEMU_PACKED;
+typedef struct AcpiIortRC AcpiIortRC;
+
+/*
  * MADT values and structures
  */
 
