@@ -992,7 +992,7 @@ static void create_smmu(VirtBoardInfo *vbi, qemu_irq *pic)
     }
 
     qemu_fdt_setprop_cell(vbi->fdt, smmu, "clocks", vbi->clock_phandle);
-    qemu_fdt_setprop_cell(vbi->fdt, smmu, "#iommu-cells", 0);
+    qemu_fdt_setprop_cell(vbi->fdt, smmu, "#iommu-cells", 1);
     qemu_fdt_setprop_string(vbi->fdt, smmu, "clock-names", "apb_pclk");
 
     qemu_fdt_setprop_cell(vbi->fdt, smmu, "phandle", vbi->smmu_phandle);
