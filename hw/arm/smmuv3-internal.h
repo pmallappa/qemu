@@ -25,7 +25,7 @@
  * MMIO Register
  *****************************/
 enum {
-    SMMU_REG_IDR0            = 0x0,
+    R_SMMU_REG_IDR0            = 0x0,
 
 #define SMMU_IDR0_S2P            (1 << 0)
 #define SMMU_IDR0_S1P            (1 << 1)
@@ -36,13 +36,13 @@ enum {
 #define SMMU_IDR0_VMID16         (1 << 18)
 #define SMMU_IDR0_CD2L           (1 << 19)
 
-    SMMU_REG_IDR1            = 0x4,
-    SMMU_REG_IDR2            = 0x8,
-    SMMU_REG_IDR3            = 0xc,
-    SMMU_REG_IDR4            = 0x10,
-    SMMU_REG_IDR5            = 0x14,
-    SMMU_REG_IIDR            = 0x1c,
-    SMMU_REG_CR0             = 0x20,
+    R_SMMU_REG_IDR1            = 0x4,
+    R_SMMU_REG_IDR2            = 0x8,
+    R_SMMU_REG_IDR3            = 0xc,
+    R_SMMU_REG_IDR4            = 0x10,
+    R_SMMU_REG_IDR5            = 0x14,
+    R_SMMU_REG_IIDR            = 0x1c,
+    R_SMMU_REG_CR0             = 0x20,
 
 #define SMMU_CR0_SMMU_ENABLE (1 << 0)
 #define SMMU_CR0_PRIQ_ENABLE (1 << 1)
@@ -50,20 +50,20 @@ enum {
 #define SMMU_CR0_CMDQ_ENABLE (1 << 3)
 #define SMMU_CR0_ATS_CHECK   (1 << 4)
 
-    SMMU_REG_CR0_ACK         = 0x24,
-    SMMU_REG_CR1             = 0x28,
-    SMMU_REG_CR2             = 0x2c,
+    R_SMMU_REG_CR0_ACK         = 0x24,
+    R_SMMU_REG_CR1             = 0x28,
+    R_SMMU_REG_CR2             = 0x2c,
 
-    SMMU_REG_STATUSR         = 0x40,
-
-    SMMU_REG_IRQ_CTRL        = 0x50,
-    SMMU_REG_IRQ_CTRL_ACK    = 0x54,
+    R_SMMU_REG_STATUSR         = 0x40,
+    R_SMMU_REG_GBPA            = 0x44,
+    R_SMMU_REG_IRQ_CTRL        = 0x50,
+    R_SMMU_REG_IRQ_CTRL_ACK    = 0x54,
 
 #define SMMU_IRQ_CTRL_GERROR_EN (1 << 0)
 #define SMMU_IRQ_CTRL_EVENT_EN  (1 << 1)
 #define SMMU_IRQ_CTRL_PRI_EN    (1 << 2)
 
-    SMMU_REG_GERROR          = 0x60,
+    R_SMMU_REG_GERROR          = 0x60,
 
 #define SMMU_GERROR_CMDQ       (1 << 0)
 #define SMMU_GERROR_EVENTQ     (1 << 2)
@@ -74,36 +74,36 @@ enum {
 #define SMMU_GERROR_MSI_GERROR (1 << 7)
 #define SMMU_GERROR_SFM_ERR    (1 << 8)
 
-    SMMU_REG_GERRORN         = 0x64,
-    SMMU_REG_GERROR_IRQ_CFG0 = 0x68,
-    SMMU_REG_GERROR_IRQ_CFG1 = 0x70,
-    SMMU_REG_GERROR_IRQ_CFG2 = 0x74,
+    R_SMMU_REG_GERRORN         = 0x64,
+    R_SMMU_REG_GERROR_IRQ_CFG0 = 0x68,
+    R_SMMU_REG_GERROR_IRQ_CFG1 = 0x70,
+    R_SMMU_REG_GERROR_IRQ_CFG2 = 0x74,
 
     /* SMMU_BASE_RA Applies to STRTAB_BASE, CMDQ_BASE and EVTQ_BASE */
 #define SMMU_BASE_RA        (1ULL << 62)
-    SMMU_REG_STRTAB_BASE     = 0x80,
-    SMMU_REG_STRTAB_BASE_CFG = 0x88,
+    R_SMMU_REG_STRTAB_BASE     = 0x80,
+    R_SMMU_REG_STRTAB_BASE_CFG = 0x88,
 
-    SMMU_REG_CMDQ_BASE       = 0x90,
-    SMMU_REG_CMDQ_PROD       = 0x98,
-    SMMU_REG_CMDQ_CONS       = 0x9c,
+    R_SMMU_REG_CMDQ_BASE       = 0x90,
+    R_SMMU_REG_CMDQ_PROD       = 0x98,
+    R_SMMU_REG_CMDQ_CONS       = 0x9c,
     /* CMD Consumer (CONS) */
 #define SMMU_CMD_CONS_ERR_SHIFT        24
 #define SMMU_CMD_CONS_ERR_BITS         7
 
-    SMMU_REG_EVTQ_BASE       = 0xa0,
-    SMMU_REG_EVTQ_PROD       = 0xa8,
-    SMMU_REG_EVTQ_CONS       = 0xac,
-    SMMU_REG_EVTQ_IRQ_CFG0   = 0xb0,
-    SMMU_REG_EVTQ_IRQ_CFG1   = 0xb8,
-    SMMU_REG_EVTQ_IRQ_CFG2   = 0xbc,
+    R_SMMU_REG_EVTQ_BASE       = 0xa0,
+    R_SMMU_REG_EVTQ_PROD       = 0xa8,
+    R_SMMU_REG_EVTQ_CONS       = 0xac,
+    R_SMMU_REG_EVTQ_IRQ_CFG0   = 0xb0,
+    R_SMMU_REG_EVTQ_IRQ_CFG1   = 0xb8,
+    R_SMMU_REG_EVTQ_IRQ_CFG2   = 0xbc,
 
-    SMMU_REG_PRIQ_BASE       = 0xc0,
-    SMMU_REG_PRIQ_PROD       = 0xc8,
-    SMMU_REG_PRIQ_CONS       = 0xcc,
-    SMMU_REG_PRIQ_IRQ_CFG0   = 0xd0,
-    SMMU_REG_PRIQ_IRQ_CFG1   = 0xd8,
-    SMMU_REG_PRIQ_IRQ_CFG2   = 0xdc,
+    R_SMMU_REG_PRIQ_BASE       = 0xc0,
+    R_SMMU_REG_PRIQ_PROD       = 0xc8,
+    R_SMMU_REG_PRIQ_CONS       = 0xcc,
+    R_SMMU_REG_PRIQ_IRQ_CFG0   = 0xd0,
+    R_SMMU_REG_PRIQ_IRQ_CFG1   = 0xd8,
+    R_SMMU_REG_PRIQ_IRQ_CFG2   = 0xdc,
 
     SMMU_ID_REGS_OFFSET      = 0xfd0,
 
@@ -254,7 +254,7 @@ enum { /* Command completion notification */
 /*****************************
  * EVTQ fields
  *****************************/
-#define EVT_Q_OVERFLOW        (1 << 31)
+#define EVT_Q_OVERFLOW        (1U << 31)
 
 #define EVT_SET_TYPE(x, t)    deposit32((x)->word[0], 0, 8, t)
 #define EVT_SET_SID(x, s)     ((x)->word[1] =  s)
@@ -294,8 +294,8 @@ typedef enum evt_err SMMUEvtErr;
 /*****************************
  * SMMU Data structures
  *****************************/
-#define ARM_SMMU_FEAT_PASSID_SUPPORT  (1 << 24) /* Some random bits for now */
-#define ARM_SMMU_FEAT_CD_2LVL         (1 << 25)
+#define ARM_SMMU_FEAT_PASSID_SUPPORT  (1U << 24) /* Some random bits for now */
+#define ARM_SMMU_FEAT_CD_2LVL         (1U << 25)
 
 struct SMMUQueue {
      hwaddr base;
@@ -317,50 +317,34 @@ typedef struct SMMUQueue SMMUQueue;
 
 #define Q_ENTRY(q, idx)  (q->base + q->ent_size * idx)
 #define Q_WRAP(q, pc)    ((pc) >> (q)->shift)
-#define Q_IDX(q, pc)     ((pc) & ((1 << (q)->shift) - 1))
+#define Q_IDX(q, pc)     ((pc) & ((1U << (q)->shift) - 1))
 
-struct __smmu_data2 {
-    uint32_t word[2];
-};
+#define STE_PTR_WORDS    2              /* STE Level 1 Descriptor */
+#define STE_DESC_WORDS   8              /* Stream Table Entry(STE) */
+#define CD_PTR_WORDS     2              /* CD Level 1 Descriptor */
+#define CD_DESC_WORDS    8              /* Context Descriptor(CD) */
+#define CMDQ_ENTRY_WORDS 4              /* Command Entry */
+#define EVTQ_ENTRY_WORDS 8              /* Event Entry */
+#define PRIQ_ENTRY_WORDS 4              /* PRI entry */
 
-struct __smmu_data8 {
-    uint32_t word[8];
-};
+typedef struct {
+    uint32_t word[CMDQ_ENTRY_WORDS];
+} Cmd;
+typedef struct {
+    uint32_t word[EVTQ_ENTRY_WORDS];
+} Evt;
+typedef struct {
+    uint32_t word[PRIQ_ENTRY_WORDS];
+} Pri;
 
-struct __smmu_data16 {
-    uint32_t word[16];
-};
-
-struct __smmu_data4 {
-    uint32_t word[4];
-};
-
-typedef struct __smmu_data2  STEDesc; /* STE Level 1 Descriptor */
-typedef struct __smmu_data16 Ste;     /* Stream Table Entry(STE) */
-typedef struct __smmu_data2  CDDesc;  /* CD Level 1 Descriptor */
-typedef struct __smmu_data16 Cd;      /* Context Descriptor(CD) */
-
-typedef struct __smmu_data4  Cmd; /* Command Entry */
-typedef struct __smmu_data8  Evt; /* Event Entry */
-typedef struct __smmu_data4  Pri; /* PRI entry */
+typedef struct {
+    uint32_t word[STE_DESC_WORDS];
+} ste_raw_t ;
+typedef struct {
+    uint32_t word[CD_DESC_WORDS];
+} cd_raw_t;
 
 
-/*****************************
- * Broadcom Specific register and bits
- *****************************/
-#define SMMU_REG_CNTL         (0x410 << 2)
-#define SMMU_REG_CNTL_1       (0x411 << 2)
-#define SMMU_REG_INTERRUPT    (0x412 << 2)
-/* BIT encoding is same as SMMU_REG_INTERRUPT, except for last 4 bits */
-#define SMMU_REG_INTERRUPT_EN (0x413 << 2)
-
-#define SMMU_INTR_BMI_ERR  (1 << 6) /* Smmu BMI Rd Wr Error*/
-#define SMMU_INTR_BSI_ERR  (1 << 5) /* Smmu BSI Rd Wr Error*/
-#define SMMU_INTR_SBU_INTR (1 << 4) /* SBU interrupt 0 */
-#define SMMU_INTR_CMD_SYNC (1 << 3) /* CmdSync completion set to interrupt */
-#define SMMU_INTR_EVENT    (1 << 2) /* high till EventQ.PROD != EventQ.CONS */
-#define SMMU_INTR_PRI      (1 << 1) /* PriQ. high till PriQ.PROD != PriQ.CONS */
-#define SMMU_INTR_GERROR   (1 << 0) /* cleared when  GERRORN is written */
 
 /*****************************
  * QEMu related
@@ -377,7 +361,7 @@ typedef struct {
     OBJECT_GET_CLASS(SMMUBaseClass, (obj), TYPE_SMMU_V3_DEV)
 
 #ifdef ARM_SMMU_DEBUG
-static inline void dump_ste(Ste *ste)
+static inline void dump_ste(ste_raw_t *ste)
 {
     int i;
 
@@ -387,7 +371,7 @@ static inline void dump_ste(Ste *ste)
     }
 }
 
-static inline void dump_cd(Cd *cd)
+static inline void dump_cd(cd_raw_t *cd)
 {
     int i;
     for (i = 0; i < ARRAY_SIZE(cd->word); i += 2) {

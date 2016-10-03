@@ -62,9 +62,8 @@ typedef struct SMMUTransCfg {
     uint32_t granule[3];
     uint32_t va_size[3];
     uint32_t granule_sz[3];
-
-    hwaddr pa;                          /* Output from S1, Final PA */
-    bool    s2_needed;
+    hwaddr   pa;                          /* Output from S1, Final PA */
+    bool     s2_needed;
 } SMMUTransCfg;
 
 struct SMMUTransReq {
@@ -90,8 +89,6 @@ typedef struct {
 #ifdef ARM_SMMU_DEBUG
 
 extern uint32_t  dbg_bits;
-
-#define HERE()  printf("%s:%d\n", __func__, __LINE__)
 
 enum {
     SMMU_DBG_PANIC, SMMU_DBG_CRIT, SMMU_DBG_WARN, /* error level */
