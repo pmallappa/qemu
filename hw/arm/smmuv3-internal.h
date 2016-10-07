@@ -124,11 +124,12 @@ enum {
     STE_CONFIG_S1TR_S2TR = 3,           /* S1 Translate, S2 Translate */
 };
 #define STE_S1FMT(x)   extract32((x)->word[0], 4, 2)
-#define STE_S1CDMAX(x) extract32((x)->word[1], 8, 2)
+#define STE_S1CDMAX(x) extract32((x)->word[1], 27, 2)  /* 1 */
+#define STE_S1STALLD(x) extract32((x)->word[2], 27, 1) /* 2 */
 #define STE_EATS(x)    extract32((x)->word[2], 28, 2)
 #define STE_STRW(x)    extract32((x)->word[2], 30, 2)
 #define STE_S2VMID(x)  extract32((x)->word[4], 0, 16) /* 4 */
-#define STE_S2T0SZ(x)  extract32((x)->word[5], 0, 6) /* 5 */
+#define STE_S2T0SZ(x)  extract32((x)->word[5], 0, 6)  /* 5 */
 #define STE_S2TG(x)    extract32((x)->word[5], 14, 2)
 #define STE_S2PS(x)    extract32((x)->word[5], 16, 3)
 #define STE_S2AA64(x)  extract32((x)->word[5], 19, 1)
@@ -174,9 +175,14 @@ enum {
 #define CD_TG0(x)     CD_TG((x), 0)
 #define CD_TG1(x)     CD_TG((x), 1)
 #define CD_EPD0(x)    CD_EPD((x), 0)
+#define CD_ENDI(x)    extract32((x)->word[0], 15, 1)
 #define CD_EPD1(x)    CD_EPD((x), 1)
 #define CD_IPS(x)     extract32((x)->word[1], 0, 3)
 #define CD_AARCH64(x) extract32((x)->word[1], 9, 1)
+#define CD_HA(x)      extract32((x)->word[1], 9, 1)
+#define CD_HA(x)      extract32((x)->word[1], 9, 1)
+#define CD_S(x)       extract32((x)->word[1], 12, 1)
+#define CD_A(x)       extract32((x)->word[1], 14, 1)
 #define CD_TTB0(x)    CD_TTB((x), 0)
 #define CD_TTB1(x)    CD_TTB((x), 1)
 

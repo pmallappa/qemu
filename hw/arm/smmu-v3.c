@@ -59,8 +59,43 @@ struct SMMUPciBus {
     SMMUDevice   *pbdev[0]; /* Parent array is sparse, so dynamically alloc */
 };
 
-typedef struct SMMUV3State SMMUV3State;
+typedef struct SMMURegIdr0 SMMURegIdr0;
+struct SMMURegIdr0 {
+    bool    s2p;
+    bool    s1p;
+    uint8_t ttf;
+    bool    cohacc;
+    bool    btm;
+    bool    httu;
+    bool    dormhint;
+    bool    hyp;
+    bool    ats;
+    bool    ns1ats;
+    bool    asid16;
+    bool    msi;
+    bool    sev;
+    bool    atos;
+    bool    pri;
+    bool    vmw;
+    bool    vmid16;
+    bool    cd2l;
+    bool    vatos;
+    uint8_t ttendian;
+    uint8_t stall_model;
+    bool    term_model;
+    uint8_t st_level;
+};
 
+typedef struct SMMURegIdr5 SMMURegIdr5;
+struct SMMURegIdr5 {
+    uint8_t oas;
+    bool gran4k;
+    bool gran16k;
+    bool gran64k;
+    uint16_t stall_max;
+};
+
+typedef struct SMMUV3State SMMUV3State;
 struct SMMUV3State {
     SMMUState     smmu_state;
 
@@ -86,6 +121,10 @@ struct SMMUV3State {
      * pci device.
     */
     GHashTable   *smmu_as_by_busptr;
+
+    /* Most frequently visited static values */
+    SMMURegIdr0 idr0;
+    SMMURegIdr5 idr5;
 };
 
 struct SMMUSte {
@@ -94,6 +133,7 @@ struct SMMUSte {
     uint8_t  s1_fmt;
     hwaddr   s1_ctx_ptr;
     uint32_t s1_cd_max;
+    bool     s1_stalld;
     uint8_t  eats;
     uint8_t  strw;
     uint16_t s2_vmid;
@@ -121,6 +161,9 @@ struct SMMUCd {
     uint16_t asid;
     hwaddr   ttb0;
     hwaddr   ttb1;
+    bool     endi;
+    bool     s;
+    bool     a;
 };
 typedef struct SMMUCd SMMUCd;
 
@@ -500,6 +543,49 @@ static void smmu_update_irq(SMMUV3State *s, uint64_t addr, uint64_t val)
     }
 }
 
+static void
+smmu_fill_idr0(SMMUV3State *s, uint32_t val)
+{
+    SMMURegIdr0 *idr0 = &s->idr0;
+
+    idr0->s2p         = extract32(val, 0, 1);
+    idr0->s1p         = extract32(val, 1, 1);
+    idr0->ttf         = extract32(val, 2, 2);
+    idr0->cohacc      = extract32(val, 4, 1);
+    idr0->btm         = extract32(val, 5, 1);
+    idr0->httu        = extract32(val, 6, 2);
+    idr0->dormhint    = extract32(val, 8, 1);
+    idr0->hyp         = extract32(val, 9, 1);
+    idr0->ats         = extract32(val, 10, 1);
+    idr0->ns1ats      = extract32(val, 11, 1);
+    idr0->asid16      = extract32(val, 12, 1);
+    idr0->msi         = extract32(val, 13, 1);
+    idr0->sev         = extract32(val, 14, 1);
+    idr0->atos        = extract32(val, 15, 1);
+    idr0->pri         = extract32(val, 16, 1);
+    idr0->vmw         = extract32(val, 17, 1);
+    idr0->vmid16      = extract32(val, 18, 1);
+    idr0->cd2l        = extract32(val, 19, 1);
+    idr0->vatos       = extract32(val, 20, 1);
+    idr0->ttendian    = extract32(val, 21, 2);
+    idr0->stall_model = extract32(val, 24, 2);
+    idr0->term_model  = extract32(val, 26, 1);
+    idr0->st_level    = extract32(val, 27, 2);
+}
+
+static void
+smmu_fill_idr5(SMMUV3State *s, uint32_t val)
+{
+    SMMURegIdr5 *idr5 = &s->idr5;
+
+    idr5->oas       = extract32(val, 0, 3);
+    idr5->gran4k    = extract32(val, 4, 1);
+    idr5->gran16k   = extract32(val, 5, 1);
+    idr5->gran64k   = extract32(val, 6, 1);
+    idr5->stall_max = extract32(val, 16, 16);
+
+}
+
 #define SMMU_ID_REG_INIT(s, reg, d) do {        \
     s->regs[reg >> 2] = d;                      \
     } while (0)
@@ -523,6 +609,8 @@ static void smmuv3_id_reg_init(SMMUV3State *s)
 
     SMMU_ID_REG_INIT(s, R_SMMU_REG_IDR0, data);
 
+    smmu_fill_idr0(s, data);
+
 #define SMMU_SID_SIZE         16
 #define SMMU_QUEUE_SIZE_LOG2  19
     data =
@@ -541,7 +629,7 @@ static void smmuv3_id_reg_init(SMMUV3State *s)
         4 << 0;                     /* OAS = 44 bits */
 
     SMMU_ID_REG_INIT(s, R_SMMU_REG_IDR5, data);
-
+    smmu_fill_idr5(s, data);
 }
 
 static void smmuv3_init(SMMUV3State *s)
@@ -582,44 +670,124 @@ static inline int smmu_get_cd(SMMUV3State *s, SMMUSte *ste, uint32_t ssid, cd_ra
     return dma_memory_read(&address_space_memory, addr, buf, sizeof(*buf));
 }
 
+static inline int oas2bits(int oas)
+{
+    switch (oas) {
+    case 2:
+        return 40;
+    case 3:
+        return 42;
+    case 4:
+        return 44;
+    case 5:
+    default: return 48;
+    }
+}
+
+enum {STRW_NS_EL0, STRW_NS_EL1,
+      STRW_EL2, STRW_EL2_E2H,
+      STRW_SECURE, STRW_EL3,
+      STRW_RESERVED};
+
+/*
+ * This looks little too much, but for future comparison with spec
+ * this more-or-less looks same as what spec defines (broken up into logical)
+ * pieces for easier reading. Section 6.4 SMMU spec v17.0.
+ */
 static bool
 is_cd_consistent(SMMUV3State *s, SMMUSte *ste, SMMUCd *cd)
 {
+	/* We dont support secure featue of SMMU just yet */
+	bool ste_secure = false;
+	bool cr2_e2h = smmu_read_reg(s, R_SMMU_REG_CR2) & 1U;
+    SMMURegIdr0 *idr0 = &s->idr0;
+    SMMURegIdr5 *idr5 = &s->idr5;
+
+    bool ttf[] = {idr0->ttf & 0x1,
+                  idr0->ttf & 0x2};
+
+    unsigned ipa_range = cd->aa64 == 0 ? 40:
+        MIN(oas2bits(cd->ips), oas2bits(idr5->oas));
+
+	unsigned strw = (ste->strw == 0b00 && !ste_secure) ? STRW_NS_EL1 :
+        (ste->strw == 0x2 && !ste_secure && cr2_e2h == 1) ? STRW_EL2_E2H :
+        (ste->strw == 0x2 && !ste_secure && cr2_e2h == 0) ? STRW_EL2 :
+        (ste->strw == 0 && ste_secure) ? STRW_SECURE :
+        (ste->strw == 0x1 && ste_secure) ? STRW_EL3 : STRW_RESERVED;
+
+	bool cfg0 = (strw == STRW_EL2 || strw == STRW_EL3) ? 0 : cd->epd0;
+	bool cfg1 = (strw == STRW_EL2 || strw == STRW_EL3) ? 1 : cd->epd1;
+    uint8_t granule_supported = ((idr5->gran4k << 0) |
+                            (idr5->gran64k << 1) |
+                            (idr5->gran16k << 2));
+    uint64_t maxpa;
+
+	if (!cd->valid)
+		return false;
+
+	if ((ste->s1_stalld == 1 && cd->s == 1) ||
+		(idr0->term_model == 1 && cd->a == 0))
+		return false;
+
+	if ((!ste_secure && idr0->stall_model == 0x1 && cd->s == 1) ||
+		(!ste_secure && idr0->stall_model == 0x2 && cd->s == 0) ||
+		(ste_secure && idr0->stall_model == 0x1 && cd->s == 1) ||
+		(ste_secure && idr0->stall_model == 0x2 && cd->s == 0))
+		return false;
+
+	if ((!cfg0 || !cfg1) &&
+		((idr0->ttendian == 0x2 && cd->endi == 1) ||
+         (idr0->ttendian == 0x3 && cd->endi == 0)))
+		return false;
+
+	if ((cd->aa64 == 0 && ((ttf[0] == 0) ||
+		(strw == STRW_EL3) ||
+		(strw == STRW_EL2_E2H))) ||
+		(cd->aa64 == 1 && ((ttf[1] == 0) ||
+		((ste->config & (1U<<1)) && ste->s2_aa64 == 0))))
+			return false;
+
+	if ((strw == STRW_NS_EL1 || strw == STRW_SECURE || strw == STRW_EL2_E2H) &&
+		idr0->asid16 == 0 && cd->asid != 0x00)
+        return false;
+
+    maxpa = deposit64(0, 0, ipa_range, ~0UL);
+
+#define ADDR_OUTSIDE_RANGE(x, max) ((int64_t)((max) - (x)) < 0)
+#if 0
+    if (((cd->aa64 == 1 && CONSTR_UNPRED_TXSZ_OOR_ILLEGAL == YES) &&
+         ((cfg0 == 0 && TXSZ_OUTSIDE_VALID_RANGE(cd->t0sz)) ||
+          (cfg1 == 0 && TXSZ_OUTSIDE_VALID_RANGE(cd->t1sz)))))
+        return false;
+#endif
+        if ((!cfg0 &&
+             ((cd->aa64 == 1 && (cd->tg0 & granule_supported)) ||
+              ADDR_OUTSIDE_RANGE(cd->ttb0, maxpa))) ||
+            (!cfg1 &&
+             ((cd->aa64 == 1 && cd->tg1 & granule_supported) ||
+             ADDR_OUTSIDE_RANGE(cd->ttb1, maxpa))))
+            return false;
+
     return true;
 }
 
 static int
 is_ste_consistent(SMMUV3State *s, SMMUSte *ste)
 {
-    uint32_t _config = ste->config,
-        idr0 = smmu_read32_reg(s, R_SMMU_REG_IDR0),
-        idr5 = smmu_read32_reg(s, R_SMMU_REG_IDR5);
 
-    uint32_t httu = extract32(idr0, 6, 2);
+    SMMURegIdr0 *idr0 = &s->idr0;
+    SMMURegIdr5 *idr5 = &s->idr5;
+    uint32_t _config = ste->config;
+
     bool config[] = {_config & 0x1,
                      _config & 0x2,
                      _config & 0x3};
-    bool granule_supported;
-
-    bool s1p = idr0 & SMMU_IDR0_S1P,
-        s2p = idr0 & SMMU_IDR0_S2P,
-        hyp = idr0 & SMMU_IDR0_HYP,
-        cd2l = idr0 & SMMU_IDR0_CD2L,
-        idr0_vmid = idr0 & SMMU_IDR0_VMID16,
-        ats = idr0 & SMMU_IDR0_ATS,
-        ttf0 = (idr0 >> 2) & 0x1,
-        ttf1 = (idr0 >> 3) & 0x1;
+    uint8_t granule_supported;
+    bool ttf0 = idr0->ttf & 0x1;
+    bool ttf1 = idr0->ttf & 0x2;
 
     int ssidsz = (smmu_read32_reg(s, R_SMMU_REG_IDR1) >> 6) & 0x1f;
 
-    uint32_t ste_vmid = ste->s2_vmid,
-        ste_eats = ste->eats,
-        ste_s2s = ste->s2_s,
-        ste_s1fmt = ste->s1_fmt,
-        aa64 = ste->s2_aa64,
-        ste_s1cdmax = ste->s1_cd_max;
-
-    uint8_t ste_strw = ste->strw;
     uint64_t oas, max_pa;
     bool strw_ign;
     bool addr_out_of_range;
@@ -629,41 +797,35 @@ is_ste_consistent(SMMUV3State *s, SMMUSte *ste)
         return false;
     }
 
-    switch (ste->s2_tg) {
-    case 1:
-        granule_supported = 0x4; break;
-    case 2:
-        granule_supported = 0x2; break;
-    case 0:
-        granule_supported = 0x1; break;
-    }
-    granule_supported &= (idr5 >> 4);
+    granule_supported = ste->s2_tg & (idr5->gran4k |
+                                      (idr5->gran64k << 1) |
+                                      (idr5->gran16k << 2));
 
     if (!config[2]) {
-        if ((!s1p && config[0]) ||
-            (!s2p && config[1]) ||
-            (s2p && config[1])) {
+        if ((!idr0->s1p && config[0]) ||
+            (!idr0->s2p && config[1]) ||
+            (idr0->s2p && config[1])) {
             SMMU_DPRINTF(STE, "STE inconsistant, S2P mismatch\n");
             return false;
         }
-        if (!ssidsz && ste_s1cdmax && config[0] && !cd2l &&
-            (ste_s1fmt == 1 || ste_s1fmt == 2)) {
+        if (!ssidsz && ste->s1_cd_max && config[0] && !idr0->cd2l &&
+            (ste->s1_fmt == 1 || ste->s1_fmt == 2)) {
             SMMU_DPRINTF(STE, "STE inconsistant, CD mismatch\n");
             return false;
         }
-        if (ats && ((_config & 0x3) == 0) &&
-            ((ste_eats == 2 && (_config != 0x7 || ste_s2s)) ||
-             (ste_eats == 1 && !ste_s2s))) {
+        if (idr0->ats && ((_config & 0x3) == 0) &&
+            ((ste->eats == 2 && (_config != 0x7 || ste->s2_s)) ||
+             (ste->eats == 1 && !ste->s2_s))) {
             SMMU_DPRINTF(STE, "STE inconsistant, EATS/S2S mismatch\n");
             return false;
         }
-        if (config[0] && (ssidsz && (ste_s1cdmax > ssidsz))) {
+        if (config[0] && (ssidsz && (ste->s1_cd_max > ssidsz))) {
             SMMU_DPRINTF(STE, "STE inconsistant, SSID out of range\n");
             return false;
         }
     }
 
-    oas = MIN(ste->s2_ps, idr5 & 0x7);
+    oas = MIN(ste->s2_ps, idr5->oas & 0x7);
 
     if (oas == 3) {
         max_pa = deposit64(0, 0, 42, ~0UL);
@@ -671,29 +833,29 @@ is_ste_consistent(SMMUV3State *s, SMMUSte *ste)
         max_pa = deposit64(0, 0, (32 + (oas * 4)), ~0UL);
     }
 
-    strw_ign = (!s1p || !hyp || (_config == 4));
+    strw_ign = (!idr0->s1p || !idr0->hyp || (_config == 4));
 
     addr_out_of_range = (int64_t)(max_pa - ste->s2_ttb) < 0;
 
     if (config[1] && (
-        (aa64 && !granule_supported) ||
-        (!aa64 && !ttf0) ||
-        (aa64 && !ttf1)  ||
-        ((ste->s2_ha || ste->s2_hd) && !aa64) ||
-        ((ste->s2_ha || ste->s2_hd) && !httu) ||
-        (ste->s2_hd && (httu == 1)) ||
+        (ste->s2_aa64 && !granule_supported) ||
+        (!ste->s2_aa64 && !ttf0) ||
+        (ste->s2_aa64 && !ttf1)  ||
+        ((ste->s2_ha || ste->s2_hd) && !ste->s2_aa64) ||
+        ((ste->s2_ha || ste->s2_hd) && !idr0->httu) ||
+        (ste->s2_hd && (idr0->httu == 1)) ||
         addr_out_of_range)) {
         SMMU_DPRINTF(STE, "STE inconsistant\n");
         SMMU_DPRINTF(STE, "config[1]:%d gran:%d addr:%d\n"
                      " aa64:%d ttf0:%d ttf1:%d s2ha:%d s2hd:%d httu:%d\n",
                      config[1], granule_supported,
-                     addr_out_of_range, aa64, ttf0, ttf1, ste->s2_ha,
-                     ste->s2_hd, httu);
+                     addr_out_of_range, ste->s2_aa64, ttf0, ttf1, ste->s2_ha,
+                     ste->s2_hd, idr0->httu);
         SMMU_DPRINTF(STE, "maxpa:%lx s2ttb:%lx\n", max_pa, ste->s2_ttb);
         return false;
     }
-    if (s2p && (config[0] == 0 && config[1]) &&
-        (strw_ign || !ste_strw) && !idr0_vmid && !(ste_vmid >> 8)) {
+    if (idr0->s2p && (config[0] == 0 && config[1]) &&
+        (strw_ign || !ste->strw) && !idr0->vmid16 && !(ste->s2_vmid >> 8)) {
         SMMU_DPRINTF(STE, "STE inconsistant, VMID out of range\n");
         return false;
     }
@@ -712,20 +874,6 @@ static int tg2granule(int bits, bool tg1)
         return tg1 ? 16 : 12;
     default:
         return 12;
-    }
-}
-
-static inline int oas2bits(int oas)
-{
-    switch (oas) {
-    case 2:
-        return 40;
-    case 3:
-        return 42;
-    case 4:
-        return 44;
-    case 5:
-    default: return 48;
     }
 }
 
@@ -749,6 +897,7 @@ smmu_update_ste_fields(SMMUSte *ste, ste_raw_t *ste_raw)
     ste->s1_fmt     = STE_S1FMT(ste_raw);
     ste->s1_ctx_ptr = STE_CTXPTR(ste_raw);
     ste->s1_cd_max  = STE_S1CDMAX(ste_raw);
+    ste->s1_stalld  = STE_S1STALLD(ste_raw);
     ste->eats       = STE_EATS(ste_raw);
     ste->strw       = STE_STRW(ste_raw);
     ste->s2_vmid    = STE_S2VMID(ste_raw);
@@ -831,6 +980,9 @@ smmu_update_cd_fields(SMMUCd *cd, cd_raw_t *cd_raw)
     cd->ttb0  = CD_TTB0(cd_raw);
     cd->ttb1  = CD_TTB1(cd_raw);
     cd->ips   = CD_IPS(cd_raw);
+    cd->endi  = CD_ENDI(cd_raw);
+    cd->s     = CD_S(cd_raw);
+    cd->a     = CD_A(cd_raw);
 }
 
 static int smmu_find_cd(SMMUV3State *s, SMMUSte *ste, SMMUCd *cd)
@@ -1084,7 +1236,7 @@ smmuv3_translate(MemoryRegion *mr, hwaddr addr, bool is_write)
 
     /* Stream Bypass */
     if (ste.config & STE_CONFIG_S1TR) {
-        if (!is_cd_valid(s, &ste, &cd)) {
+        if (!cd.valid) {
             error = SMMU_EVT_C_BAD_CD;
             goto error_out;
         }
