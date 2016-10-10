@@ -370,6 +370,61 @@ static MemTxResult smmu_read_cmdq(SMMUV3State *s, Cmd *cmd)
     return ret;
 }
 
+/*
+ * GERROR is updated when rasing an interrupt, GERRORN will be updated
+ * by s/w and should match GERROR before normal operation resumes.
+ */
+static void smmu_irq_clear(SMMUV3State *s, uint64_t gerrorn)
+{
+    int irq = SMMU_IRQ_GERROR;
+    uint32_t toggled;
+    uint32_t irq_map[] = {
+        [0] = SMMU_IRQ_CMD_SYNC,
+        [1] = SMMU_IRQ_EVTQ,
+        [2] = SMMU_IRQ_PRIQ,
+    };
+
+    toggled = smmu_read32_reg(s, R_SMMU_REG_GERRORN) ^ gerrorn;
+    SMMU_DPRINTF(IRQ, "toggled irq %x\n", toggled);
+    while (toggled) {
+        irq = ctz32(toggled);
+        SMMU_DPRINTF(IRQ, "lowering irq %d\n", irq);
+        qemu_irq_lower(s->irq[irq_map[irq]]);
+
+        toggled &= toggled - 1;
+    }
+}
+
+static inline bool
+smmu_is_irq_pending(SMMUV3State *s, int irq)
+{
+    return smmu_read32_reg(s, R_SMMU_REG_GERROR) ^
+        smmu_read32_reg(s, R_SMMU_REG_GERRORN);
+}
+
+static void smmu_update_irq_status(SMMUV3State *s, uint64_t addr, uint64_t val)
+{
+
+    SMMU_DPRINTF(IRQ, "irq pend: %d gerror:%x gerrorn:%x\n",
+                 smmu_is_irq_pending(s, 0),
+                 smmu_read32_reg(s, R_SMMU_REG_GERROR),
+                 smmu_read32_reg(s, R_SMMU_REG_GERRORN));
+
+    smmu_irq_clear(s, val);
+
+    smmu_write32_reg(s, R_SMMU_REG_GERRORN, val);
+
+    SMMU_DPRINTF(IRQ, "irq pend: %d gerror:%x gerrorn:%x\n",
+                 smmu_is_irq_pending(s, 0),
+                 smmu_read32_reg(s, R_SMMU_REG_GERROR),
+                 smmu_read32_reg(s, R_SMMU_REG_GERRORN));
+
+    /* Clear only when no more left */
+    if (!smmu_is_irq_pending(s, 0)) {
+        qemu_irq_lower(s->irq[0]);
+    }
+}
+
 #define SMMU_CMDQ_ERR(s) ((smmu_read32_reg(s, R_SMMU_REG_GERROR) ^    \
                            smmu_read32_reg(s, R_SMMU_REG_GERRORN)) &  \
                           SMMU_GERROR_CMDQ)
@@ -395,7 +450,6 @@ static int smmu_cmdq_consume(SMMUV3State *s)
 
         SMMU_DPRINTF(DBG2, "CMDQ base: %lx cons:%d prod:%d val:%x wrap:%d\n",
                      q->base, q->cons, q->prod, cmd.word[0], q->wrap.cons);
-
         switch (CMD_TYPE(&cmd)) {
         case SMMU_CMD_CFGI_STE:
         case SMMU_CMD_CFGI_STE_RANGE:
@@ -406,8 +460,12 @@ static int smmu_cmdq_consume(SMMUV3State *s)
         case SMMU_CMD_TLBI_NH_ALL:
         case SMMU_CMD_TLBI_S2_IPA:
             break;
-        case SMMU_CMD_SYNC:     /* Fallthrough */
+        case SMMU_CMD_SYNC:
+            SMMU_DPRINTF(DBG2, "Command type: %x CMD_CS:%x\n",
+                         CMD_TYPE(&cmd), CMD_CS(&cmd));
+            dump_cmd(&cmd);
             if (CMD_CS(&cmd) & CMD_SYNC_SIG_IRQ) {
+                SMMU_DPRINTF(IRQ, "rasing cmdq interrupt\n");
                 smmu_irq_raise(s, SMMU_IRQ_CMD_SYNC, SMMU_CMD_ERR_NONE);
             }
             break;
@@ -419,7 +477,7 @@ static int smmu_cmdq_consume(SMMUV3State *s)
 
         default:
             error = SMMU_CMD_ERR_ILLEGAL;
-            SMMU_DPRINTF(CRIT, "Unknown Command type: %x, ignoring\n",
+            SMMU_DPRINTF(DBG2, "Unknown Command type: %x, ignoring\n",
                          CMD_TYPE(&cmd));
             if (IS_DBG_ENABLED(CD)) {
                 dump_cmd(&cmd);
@@ -443,33 +501,6 @@ out_while:
                  s->cmdq.wrap.cons, s->cmdq.cons);
 
     return 0;
-}
-
-static inline bool
-smmu_is_irq_pending(SMMUV3State *s, int irq)
-{
-    return smmu_read32_reg(s, R_SMMU_REG_GERROR) ^
-        smmu_read32_reg(s, R_SMMU_REG_GERRORN);
-}
-
-/*
- * GERROR is updated when rasing an interrupt, GERRORN will be updated
- * by s/w and should match GERROR before normal operation resumes.
- */
-static void smmu_irq_clear(SMMUV3State *s, uint64_t gerrorn)
-{
-    int irq = SMMU_IRQ_GERROR;
-    uint32_t toggled;
-
-    toggled = smmu_read32_reg(s, R_SMMU_REG_GERRORN) ^ gerrorn;
-
-    while (toggled) {
-        irq = ctz32(toggled);
-
-        qemu_irq_lower(s->irq[irq]);
-
-        toggled &= toggled - 1;
-    }
 }
 
 static int smmu_evtq_update(SMMUV3State *s)
@@ -524,23 +555,6 @@ check_cmdq:
         SMMU_DPRINTF(INFO, "cmdq not enabled or error :%x\n", SMMU_CMDQ_ERR(s));
     }
 
-}
-
-static void smmu_update_irq(SMMUV3State *s, uint64_t addr, uint64_t val)
-{
-    smmu_irq_clear(s, val);
-
-    smmu_write32_reg(s, R_SMMU_REG_GERRORN, val);
-
-    SMMU_DPRINTF(IRQ, "irq pend: %d gerror:%x gerrorn:%x\n",
-                 smmu_is_irq_pending(s, 0),
-                 smmu_read32_reg(s, R_SMMU_REG_GERROR),
-                 smmu_read32_reg(s, R_SMMU_REG_GERRORN));
-
-    /* Clear only when no more left */
-    if (!smmu_is_irq_pending(s, 0)) {
-        qemu_irq_lower(s->irq[0]);
-    }
 }
 
 static void
@@ -1371,7 +1385,7 @@ static void smmu_write_mmio(void *opaque, hwaddr addr,
         return;
 
     case R_SMMU_REG_GERRORN:
-        smmu_update_irq(s, addr, val);
+        smmu_update_irq_status(s, addr, val);
         return;
 
     case R_SMMU_REG_STRTAB_BASE:
