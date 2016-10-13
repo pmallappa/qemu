@@ -39,6 +39,15 @@
 #include "hw/arm/smmu-common.h"
 #include "hw/arm/smmuv3-internal.h"
 
+#ifdef ARM_SMMU_DEBUG
+uint32_t dbg_bits =                             \
+    DBG_DEFAULT |                               \
+    DBG_VERBOSE3 |                              \
+    DBG_EXTRA |                                 \
+    DBG_VERBOSE1;
+#else
+const uint32_t dbg_bits;
+#endif
 
 /*
  * STE/CD modification helpers
@@ -95,16 +104,20 @@
 #define CD_SET_TG(cd, sel, val)    ___SET((cd), 0, (16*(sel)) + 6, 2, val)
 #define CD_SET_EPD(cd, sel, val)   ___SET((cd), 0, (16*(sel)) + 14, 1, val)
 
-#define CD_SET_T0SZ(cd, val)    CD_SET_TSZ((cd), 0, val)
-#define CD_SET_T1SZ(cd, val)    CD_SET_TSZ((cd), 1, val)
-#define CD_SET_TG0(cd, val)     CD_SET_TG((cd), 0, val)
-#define CD_SET_TG1(cd, val)     CD_SET_TG((cd), 1, val)
-#define CD_SET_EPD0(cd, val)    CD_SET_EPD((cd), 0, val)
-#define CD_SET_EPD1(cd, val)    CD_SET_EPD((cd), 1, val)
-#define CD_SET_IPS(cd, val)     ___SET((cd), 1, 0, 3, val)
+#define CD_SET_T0SZ(cd, val)   CD_SET_TSZ((cd), 0, val)
+#define CD_SET_T1SZ(cd, val)   CD_SET_TSZ((cd), 1, val)
+#define CD_SET_TG0(cd, val)    CD_SET_TG((cd), 0, val)
+#define CD_SET_TG1(cd, val)    CD_SET_TG((cd), 1, val)
+#define CD_SET_EPD0(cd, val)   CD_SET_EPD((cd), 0, val)
+#define CD_SET_EPD1(cd, val)   CD_SET_EPD((cd), 1, val)
+#define CD_SET_IPS(cd, val)    ___SET((cd), 1, 0, 3, val)
 #define CD_SET_AARCH64(cd, val) ___SET((cd), 1, 9, 1, val)
-#define CD_SET_TTB0(cd, val)    CD_SET_TTB((cd), 0, val)
-#define CD_SET_TTB1(cd, val)    CD_SET_TTB((cd), 1, val)
+#define CD_SET_S(cd, val) ___SET((cd), 1, 12, 1, val)
+#define CD_SET_R(cd, val) ___SET((cd), 1, 13, 1, val)
+#define CD_SET_A(cd, val) ___SET((cd), 1, 14, 1, val)
+#define CD_SET_ASET(cd, val) ___SET((cd), 1, 15, 1, val)
+#define CD_SET_TTB0(cd, val)   CD_SET_TTB((cd), 0, val)
+#define CD_SET_TTB1(cd, val)   CD_SET_TTB((cd), 1, val)
 
 /* SMMU Device local state */
 struct SMMUDevState {
@@ -321,10 +334,10 @@ static int smmu_init_cmdq(SMMUTestState *state)
     if (!q->base)
         return -ENOMEM;
     q->base &= ~0x1fULL;    /* last 5 bits are for size in log2 */
-    smmu_write64_reg(smmu, SMMU_REG_CMDQ_BASE,
+    smmu_write64_reg(smmu, R_SMMU_REG_CMDQ_BASE,
                      q->base | q->shift);
-    smmu_write_reg(smmu, SMMU_REG_CMDQ_PROD, 0x0);
-    smmu_write_reg(smmu, SMMU_REG_CMDQ_CONS, 0x0);
+    smmu_write_reg(smmu, R_SMMU_REG_CMDQ_PROD, 0x0);
+    smmu_write_reg(smmu, R_SMMU_REG_CMDQ_CONS, 0x0);
 
     return 0;
 }
@@ -340,7 +353,7 @@ static uint64_t smmu_get_ste(SMMUDevState *smmu, int devfn)
     uint64_t span_mask = 0x3fULL;
 
     printf("devfn:%x l1_off:%x l2_off:%x\n", devfn, l1_off, l2_off);
-    stmp = smmu->strtab_base + (l1_off * sizeof(STEDesc));
+    stmp = smmu->strtab_base + (l1_off * sizeof(SteL1Desc));
     //stm = readl(stmp);
     qtest_memread(state->qtest, stmp, &stm, sizeof(stm));
     printf("stmp:%lx stm:%lx\n", stmp, stm);
@@ -349,7 +362,7 @@ static uint64_t smmu_get_ste(SMMUDevState *smmu, int devfn)
         printf("already allocated ste \n");
     } else {
         uint64_t page;
-        int size = sizeof(Ste) * (1 << split);
+        int size = sizeof(ste_raw_t) * (1 << split);
 
         page = guest_alloc(smmu->strtab_alloc, size);
         assert(!(page & span_mask));
@@ -376,7 +389,7 @@ static uint64_t smmu_get_ste(SMMUDevState *smmu, int devfn)
     }
 
     stm &= ~span_mask;
-    step = stm + (l2_off * sizeof(Ste));
+    step = stm + (l2_off * sizeof(ste_raw_t));
     printf("step:%lx\n", step);
     return step;
 }
@@ -386,7 +399,7 @@ static void smmu_strtab_initone(SMMUTestState *state, int devfn)
 
     SMMUDevState *smmu = &state->sdev;
     uint64_t step = smmu_get_ste(smmu, devfn);
-    Ste ste;
+    ste_raw_t ste;
 
     qtest_memread(state->qtest, step, &ste, sizeof(ste));
     STE_SET_CONFIG(&ste, 0x4);          /* bypass */
@@ -401,24 +414,24 @@ static int smmu_strtab_init(SMMUTestState *state)
     SMMUDevState *smmu = &state->sdev;
     SMMUTestCfg *cfg = &state->cfg;
 
-    size = sizeof(STEDesc) * (1 << cfg->sid_split);
+    size = sizeof(SteL1Desc) * (1 << cfg->sid_split);
     smmu->strtab_base = guest_alloc(state->alloc, size);
     if (!smmu->strtab_base)
         return -ENOMEM;
 
     qmemset(smmu->strtab_base, 0, size);
-    smmu_write64_reg(smmu, SMMU_REG_STRTAB_BASE, smmu->strtab_base);
-    smmu_write64_reg(smmu, SMMU_REG_STRTAB_BASE_CFG, 0x10210);
+    smmu_write64_reg(smmu, R_SMMU_REG_STRTAB_BASE, smmu->strtab_base);
+    smmu_write64_reg(smmu, R_SMMU_REG_STRTAB_BASE_CFG, 0x10210);
 
     smmu->strtab_alloc = generic_alloc_init(MMIO_RAM_ADDR +
                                             STRTAB_ALLOCATOR_START,
                                             STRTAB_ALLOCATOR_SIZE,
-                                            sizeof(Ste));
+                                            sizeof(ste_raw_t));
 
     smmu->cd_alloc = generic_alloc_init(MMIO_RAM_ADDR +
                                         CD_ALLOCATOR_START,
                                         CD_ALLOCATOR_SIZE,
-                                        sizeof(Cd));
+                                        sizeof(cd_raw_t));
 
     smmu->pgtbl_alloc = generic_alloc_init(MMIO_RAM_ADDR +
                                            PGTABLE_ALLOCATOR_START,
@@ -456,7 +469,7 @@ static int smmu_init(SMMUTestState *s)
         return ret;
 
     /* At last enable SMMU */
-    smmu_write_reg(smmu, SMMU_REG_CR0, 0x1);
+    smmu_write_reg(smmu, R_SMMU_REG_CR0, 0x1);
     return ret;
 }
 
@@ -600,7 +613,7 @@ alloc_pgtable(SMMUDevState *smmu, SMMUTransCfg *cfg, bool s2needed)
     return ttbr;
 }
 
-static inline void dump_ste1(Ste *ste)
+static inline void dump_ste1(ste_raw_t *ste)
 {
     int i;
 
@@ -610,7 +623,7 @@ static inline void dump_ste1(Ste *ste)
     }
 }
 
-static inline void dump_cd1(Cd *cd)
+static inline void dump_cd1(cd_raw_t *cd)
 {
     int i;
     for (i = 0; i < ARRAY_SIZE(cd->word); i += 2) {
@@ -618,6 +631,35 @@ static inline void dump_cd1(Cd *cd)
                i, cd->word[i], i + 1, cd->word[i + 1]);
     }
 }
+
+#define STE_CONFIG(x)  (extract32((x)->word[0], 1, 3) & 0x7)
+#define STE_CTXPTR(x)                                                   \
+    ({                                                                  \
+        unsigned long addr;                                             \
+        addr = (uint64_t)extract32((x)->word[1], 0, 16) << 32;          \
+        addr |= (uint64_t)((x)->word[0] & 0xffffffc0);                  \
+        addr;                                                           \
+    })
+#define STE_S2TTB(x)                                                    \
+    ({                                                                  \
+        unsigned long addr;                                             \
+        addr = (uint64_t)extract32((x)->word[7], 0, 16) << 32;          \
+        addr |= (uint64_t)((x)->word[6] & 0xfffffff0);                  \
+        addr;                                                           \
+    })
+
+#define CD_TTB(x, sel)                                                  \
+    ({                                                                  \
+        uint64_t hi, lo;                                                \
+        hi = extract32((x)->word[(sel) * 2 + 3], 0, 16);                \
+        hi <<= 32;                                                      \
+        lo = (x)->word[(sel) * 2 + 2] & ~0xf;                           \
+        hi | lo;                                                        \
+    })
+
+#define CD_TTB0(x)    CD_TTB((x), 0)
+#define CD_TTB1(x)    CD_TTB((x), 1)
+
 
 /*
  * This part is little complecated, we use the same page tables
@@ -630,8 +672,8 @@ update_pgtable(SMMUDevState *smmu, bool s1needed,
 {
     uint64_t step = smmu_get_ste(smmu, tdev->dev->devfn);
     SMMUTestState *state = container_of(smmu, SMMUTestState, sdev);
-    Cd cd = {0,};
-    Ste ste = {0,};
+    cd_raw_t cd = {0,};
+    ste_raw_t ste = {0,};
     int stage = cfg->stage;
 
     if (!step) {
@@ -804,10 +846,11 @@ static void test_smmu_cmdq(void)
 }
 
 const SMMUTransCfg cfg4k = {
-    .tsz = {0, 24, 24},
+    .tsz = {0, 20, 20},
     .granule = {0, 0, 0},
     .va_size = {0, 64, 64},
     .granule_sz = {0, 9, 9},
+    .oas = {0, 4, 4},
 };
 
 const SMMUTransCfg cfg64k = {
@@ -817,8 +860,8 @@ const SMMUTransCfg cfg64k = {
     .granule_sz = {0, 13, 13},
 };
 
-const SMMUTransCfg cfgs14k_s264k = {
-    .tsz = {0, 24, 16},
+const SMMUTransCfg cfgs1_4k_s2_64k = {
+    .tsz = {0, 20, 16},
     .granule = {0, 0, 1},
     .va_size = {0, 64, 64},
     .granule_sz = {0, 9, 13},
@@ -826,8 +869,8 @@ const SMMUTransCfg cfgs14k_s264k = {
     .s2_needed = true,
 };
 
-const SMMUTransCfg cfgs164k_s24k = {
-    .tsz = {0, 16, 24},
+const SMMUTransCfg cfgs164k_s2_4k = {
+    .tsz = {0, 16, 20},
     .granule = {0, 1, 0},
     .va_size = {0, 64, 64},
     .granule_sz = {0, 13, 9},
@@ -871,23 +914,22 @@ static void test_smmu_s1s2_64k(void)
     memcpy(&cfg, &cfg64k, sizeof(cfg));
 
     __test_smmu(&cfg, true, true);
-
 }
 
-static void test_smmu_s14k_s264k(void)
+static void test_smmu_s1_4k_s2_64k(void)
 {
     SMMUTransCfg cfg;
 
-    memcpy(&cfg, &cfgs14k_s264k, sizeof(cfg));
+    memcpy(&cfg, &cfgs1_4k_s2_64k, sizeof(cfg));
 
     __test_smmu(&cfg, true, true);
 }
 
-static void test_smmu_s164k_s24k(void)
+static void test_smmu_s164k_s2_4k(void)
 {
     SMMUTransCfg cfg;
 
-    memcpy(&cfg, &cfgs164k_s24k, sizeof(cfg));
+    memcpy(&cfg, &cfgs164k_s2_4k, sizeof(cfg));
 
     __test_smmu(&cfg, true, true);
 }
@@ -923,8 +965,8 @@ struct test_matrix {
     {"/smmuv3/tt/s1", "64k", test_smmu_s1_64k},
     {"/smmuv3/tt/s1s2", "4k", test_smmu_s1s2_4k},
     {"/smmuv3/tt/s1s2", "64k", test_smmu_s1s2_64k},
-    {"/smmuv3/tt/s1s2", "4k/64k", test_smmu_s14k_s264k},
-    {"/smmuv3/tt/s1s2", "64k/4k", test_smmu_s164k_s24k},
+    {"/smmuv3/tt/s1s2", "4k/64k", test_smmu_s1_4k_s2_64k},
+    {"/smmuv3/tt/s1s2", "64k/4k", test_smmu_s164k_s2_4k},
     {"/smmuv3/tt/s2", "4k", test_smmu_s2_4k},
     {"/smmuv3/tt/s2", "64k", test_smmu_s2_64k},
 };
