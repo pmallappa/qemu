@@ -859,11 +859,7 @@ is_ste_consistent(SMMUV3State *s, SMMUSte *ste)
             case 2: valid = idr5->gran16k; break;
             }
             valid; });
-#if 0
-    granule_supported = ste->s2_tg & (idr5->gran4k |
-                                      (idr5->gran64k << 1) |
-                                      (idr5->gran16k << 2));
-#endif
+
     if (!config[2]) {
         if ((!idr0->s1p && config[0]) ||
             (!idr0->s2p && config[1]) ||
