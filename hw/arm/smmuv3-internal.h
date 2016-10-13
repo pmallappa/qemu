@@ -114,8 +114,6 @@ enum {
 /*****************************
  * STE fields
  *****************************/
-#define STE_VALID(x)   extract32((x)->word[0], 0, 1) /* 0 */
-#define STE_CONFIG(x)  (extract32((x)->word[0], 1, 3) & 0x7)
 enum {
     STE_CONFIG_NONE      = 0,
     STE_CONFIG_BYPASS    = 4,           /* S1 Bypass, S2 Bypass */
@@ -123,70 +121,6 @@ enum {
     STE_CONFIG_S2TR      = 2,           /* S1 Bypass, S2 Translate */
     STE_CONFIG_S1TR_S2TR = 3,           /* S1 Translate, S2 Translate */
 };
-#define STE_S1FMT(x)   extract32((x)->word[0], 4, 2)
-#define STE_S1CDMAX(x) extract32((x)->word[1], 27, 2)  /* 1 */
-#define STE_S1STALLD(x) extract32((x)->word[2], 27, 1) /* 2 */
-#define STE_EATS(x)    extract32((x)->word[2], 28, 2)
-#define STE_STRW(x)    extract32((x)->word[2], 30, 2)
-#define STE_S2VMID(x)  extract32((x)->word[4], 0, 16) /* 4 */
-#define STE_S2T0SZ(x)  extract32((x)->word[5], 0, 6)  /* 5 */
-#define STE_S2TG(x)    extract32((x)->word[5], 14, 2)
-#define STE_S2PS(x)    extract32((x)->word[5], 16, 3)
-#define STE_S2AA64(x)  extract32((x)->word[5], 19, 1)
-#define STE_S2HD(x)    extract32((x)->word[5], 24, 1)
-#define STE_S2HA(x)    extract32((x)->word[5], 25, 1)
-#define STE_S2S(x)     extract32((x)->word[5], 26, 1)
-#define STE_CTXPTR(x)                                           \
-    ({                                                          \
-        unsigned long addr;                                     \
-        addr = (uint64_t)extract32((x)->word[1], 0, 16) << 32;  \
-        addr |= (uint64_t)((x)->word[0] & 0xffffffc0);          \
-        addr;                                                   \
-    })
-
-#define STE_S2TTB(x)                                            \
-    ({                                                          \
-        unsigned long addr;                                     \
-        addr = (uint64_t)extract32((x)->word[7], 0, 16) << 32;  \
-        addr |= (uint64_t)((x)->word[6] & 0xfffffff0);          \
-        addr;                                                   \
-    })
-
-/*****************************
- * CD fields
- *****************************/
-#define CD_VALID(x)   extract32((x)->word[0], 30, 1)
-#define CD_ASID(x)    extract32((x)->word[1], 16, 16)
-#define CD_TTB(x, sel)                                      \
-    ({                                                      \
-        uint64_t hi, lo;                                    \
-        hi = extract32((x)->word[(sel) * 2 + 3], 0, 16);    \
-        hi <<= 32;                                          \
-        lo = (x)->word[(sel) * 2 + 2] & ~0xf;               \
-        hi | lo;                                            \
-    })
-
-#define CD_TSZ(x, sel)   extract32((x)->word[0], (16 * (sel)) + 0, 6)
-#define CD_TG(x, sel)    extract32((x)->word[0], (16 * (sel)) + 6, 2)
-#define CD_EPD(x, sel)   extract32((x)->word[0], (16 * (sel)) + 14, 1)
-
-#define CD_T0SZ(x)    CD_TSZ((x), 0)
-#define CD_T1SZ(x)    CD_TSZ((x), 1)
-#define CD_TG0(x)     CD_TG((x), 0)
-#define CD_TG1(x)     CD_TG((x), 1)
-#define CD_EPD0(x)    CD_EPD((x), 0)
-#define CD_ENDI(x)    extract32((x)->word[0], 15, 1)
-#define CD_EPD1(x)    CD_EPD((x), 1)
-#define CD_IPS(x)     extract32((x)->word[1], 0, 3)
-#define CD_AARCH64(x) extract32((x)->word[1], 9, 1)
-#define CD_HA(x)      extract32((x)->word[1], 9, 1)
-#define CD_HA(x)      extract32((x)->word[1], 9, 1)
-#define CD_S(x)       extract32((x)->word[1], 12, 1)
-#define CD_A(x)       extract32((x)->word[1], 14, 1)
-#define CD_TTB0(x)    CD_TTB((x), 0)
-#define CD_TTB1(x)    CD_TTB((x), 1)
-
-#define CDM_VALID(x)    ((x)->word[0] & 0x1)
 
 /*****************************
  * Commands
@@ -326,9 +260,9 @@ typedef struct SMMUQueue SMMUQueue;
 #define Q_IDX(q, pc)     ((pc) & ((1U << (q)->shift) - 1))
 
 #define STE_PTR_WORDS    2              /* STE Level 1 Descriptor */
-#define STE_DESC_WORDS   8              /* Stream Table Entry(STE) */
+#define STE_WORDS        16             /* Stream Table Entry(STE) */
 #define CD_PTR_WORDS     2              /* CD Level 1 Descriptor */
-#define CD_DESC_WORDS    8              /* Context Descriptor(CD) */
+#define CD_WORDS         16             /* Context Descriptor(CD) */
 #define CMDQ_ENTRY_WORDS 4              /* Command Entry */
 #define EVTQ_ENTRY_WORDS 8              /* Event Entry */
 #define PRIQ_ENTRY_WORDS 4              /* PRI entry */
@@ -344,12 +278,19 @@ typedef struct {
 } Pri;
 
 typedef struct {
-    uint32_t word[STE_DESC_WORDS];
+    uint32_t word[STE_WORDS];
 } ste_raw_t ;
 typedef struct {
-    uint32_t word[CD_DESC_WORDS];
+    uint32_t word[CD_WORDS];
 } cd_raw_t;
 
+typedef struct {
+    uint32_t word[STE_PTR_WORDS];
+} SteL1Desc;
+
+typedef struct {
+    uint32_t word[CD_PTR_WORDS];
+} CdL1Desc;
 
 
 /*****************************
